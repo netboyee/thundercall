@@ -1,0 +1,37 @@
+WOUS64 KWNS 151900
+WOU4
+
+BULLETIN - IMMEDIATE BROADCAST REQUESTED
+Tornado Watch Outline Update
+NWS Storm Prediction Center Norman OK
+200 PM CDT Sat Aug 15 2026
+
+IAC001-003-153-160100-
+/O.NEW.KWNS.TO.A.0456.260815T1900Z-260816T0100Z/
+
+Iowa counties included are
+
+Adair
+Adams
+Polk
+
+$$
+
+IAZ025-026-160100-
+/O.NEW.KWNS.TO.A.0456.260815T1900Z-260816T0100Z/
+
+Iowa zones included are
+
+West Central Iowa
+Central Iowa
+
+$$
+
+GMZ853-873-160100-
+/O.NEW.KWNS.TO.A.0456.260815T1900Z-260816T0100Z/
+
+Adjacent coastal waters included are
+
+Coastal waters out 20 NM
+
+$$

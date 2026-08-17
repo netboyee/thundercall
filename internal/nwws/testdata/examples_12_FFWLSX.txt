@@ -1,0 +1,21 @@
+WGUS53 KLSX 212145
+FFWLSX
+MOC071-099-212245-
+/O.NEW.KLSX.FF.W.0017.260721T2145Z-260721T2245Z/
+
+Flash Flood Warning
+National Weather Service St Louis MO
+445 PM CDT Tue Jul 21 2026
+
+* Flash Flood Warning for...
+  Franklin County in east central Missouri...
+  Jefferson County in east central Missouri...
+
+&&
+
+LAT...LON 3855 9065 3850 9038 3828 9040 3830 9070
+3842 9077
+
+TIME...MOT...LOC 2145Z 190DEG 18KT 3840 9054
+
+$$

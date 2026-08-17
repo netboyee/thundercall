@@ -1,0 +1,21 @@
+WUUS53 KDMX 152137
+SVSDMX
+IAC049-153-181-152200-
+/O.CON.KDMX.SV.W.0123.000000T0000Z-260815T2200Z/
+
+Severe Weather Statement
+National Weather Service Des Moines IA
+437 PM CDT Sat Aug 15 2026
+
+...A SEVERE THUNDERSTORM WARNING REMAINS IN EFFECT UNTIL 500 PM CDT...
+
+At 437 PM CDT, a severe thunderstorm was located near Clive,
+moving east at 45 mph.
+
+HAZARD...70 mph wind gusts.
+
+SOURCE...Radar indicated.
+
+IMPACT...Expect damage to trees and power lines.
+
+$$

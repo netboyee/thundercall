@@ -1,0 +1,27 @@
+WHUS53 KTBW 041925
+SMWTBW
+GMZ853-873-042000-
+/O.NEW.KTBW.MA.W.0037.260904T1925Z-260904T2000Z/
+
+BULLETIN - IMMEDIATE BROADCAST REQUESTED
+Special Marine Warning
+National Weather Service Tampa Bay FL
+325 PM EDT Fri Sep 4 2026
+
+* Special Marine Warning for...
+  Coastal waters from Englewood to Tarpon Springs...
+  Waters from Englewood to Tarpon Springs out 20 NM...
+
+* Until 400 PM EDT.
+
+&&
+
+LAT...LON 2734 8260 2758 8251 2764 8234 2745 8218
+2730 8231
+
+TIME...MOT...LOC 1925Z 245DEG 21KT 2744 8243
+
+HAIL...0.00IN
+WIND...50KTS
+
+$$

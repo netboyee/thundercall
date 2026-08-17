@@ -1,0 +1,87 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: thundercall
+      MYSQL_USER: thundercall
+      MYSQL_PASSWORD: thundercall
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uthundercall -pthundercall --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      target: api
+    env_file:
+      - .env.docker
+    environment:
+      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
+      THUNDERCALL_API_LISTEN_ADDR: :8080
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  ingest:
+    build:
+      context: .
+      target: ingest
+    profiles:
+      - nwws
+    env_file:
+      - .env.docker
+    environment:
+      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
+      THUNDERCALL_REDIS_ADDR: redis:6379
+      THUNDERCALL_REDIS_STREAM: thundercall:messages
+      THUNDERCALL_REDIS_GROUP: thundercall-workers
+      THUNDERCALL_REDIS_CONSUMER: ingest
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file:
+      - .env.docker
+    environment:
+      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
+      THUNDERCALL_REDIS_ADDR: redis:6379
+      THUNDERCALL_REDIS_STREAM: thundercall:messages
+      THUNDERCALL_REDIS_GROUP: thundercall-workers
+      THUNDERCALL_REDIS_CONSUMER: worker-1
+      THUNDERCALL_TWILIO_VOICE_LOG_ONLY: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql-data:

@@ -1,0 +1,27 @@
+WFUS54 KLZK 031642
+TORLZK
+ARC125-031715-
+/O.NEW.KLZK.TO.W.0048.260503T1642Z-260503T1715Z/
+
+BULLETIN - EAS ACTIVATION REQUESTED
+Tornado Warning
+National Weather Service Little Rock AR
+1142 AM CDT Sun May 3 2026
+
+* Tornado Warning for...
+  Saline County in central Arkansas...
+
+* Until 1215 PM CDT.
+
+* At 1142 AM CDT, a severe thunderstorm capable of producing a
+  tornado was located near Benton, moving northeast at 30 mph.
+
+&&
+
+LAT...LON 3468 9248 3477 9230 3457 9215 3449 9235
+TIME...MOT...LOC 1642Z 226DEG 26KT 3458 9237
+
+TORNADO...RADAR INDICATED
+MAX HAIL SIZE...1.50IN
+
+$$

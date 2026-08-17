@@ -1,0 +1,37 @@
+WUUS53 KDMX 152118
+SVRDMX
+IAC049-153-181-152200-
+/O.NEW.KDMX.SV.W.0123.260815T2118Z-260815T2200Z/
+
+BULLETIN - IMMEDIATE BROADCAST REQUESTED
+Severe Thunderstorm Warning
+National Weather Service Des Moines IA
+418 PM CDT Sat Aug 15 2026
+
+The National Weather Service in Des Moines has issued a
+
+* Severe Thunderstorm Warning for...
+  Dallas County in central Iowa...
+  Southern Polk County in central Iowa...
+  Warren County in south central Iowa...
+
+* Until 500 PM CDT.
+
+* At 418 PM CDT, a severe thunderstorm was located near Adel,
+  moving east at 45 mph.
+
+  HAZARD...70 mph wind gusts and quarter size hail.
+
+  SOURCE...Radar indicated.
+
+  IMPACT...Tree damage is expected. Minor roof damage is possible.
+
+&&
+
+LAT...LON 4153 9421 4164 9382 4137 9369 4126 9406
+TIME...MOT...LOC 2118Z 271DEG 39KT 4148 9405
+
+HAIL...1.00IN
+WIND...70MPH
+
+$$

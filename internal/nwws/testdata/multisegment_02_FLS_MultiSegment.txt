@@ -1,0 +1,28 @@
+WGUS83 KDVN 241230
+FLSDVN
+
+Flood Statement
+National Weather Service Quad Cities IA IL
+730 AM CDT Wed Jun 24 2026
+
+IAC163-251230-
+/O.CON.KDVN.FL.W.0012.000000T0000Z-260625T1230Z/
+/DEWI4.2.ER.260624T0100Z.260624T1800Z.260625T0600Z.NO/
+730 AM CDT Wed Jun 24 2026
+
+...Flood Warning remains in effect...
+
+River levels remain above flood stage.
+
+$$
+
+IAC045-251230-
+/O.NEW.KDVN.FL.W.0013.260624T1500Z-260625T1800Z/
+/IOWI4.1.ER.260624T1500Z.260625T0000Z.260625T1200Z.NO/
+730 AM CDT Wed Jun 24 2026
+
+...Flood Warning in effect...
+
+Minor flooding is forecast.
+
+$$
