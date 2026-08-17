@@ -203,7 +203,8 @@ Defaults:
 ## Schema Notes
 
 The schema in [db/schema.sql](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/db/schema.sql)
-tracks the simplified model:
+is the single source of truth for local database setup at this stage and tracks
+the simplified model:
 
 - `accounts`
 - `users`
@@ -215,7 +216,9 @@ tracks the simplified model:
 - `api_users`
 - `api_sessions`
 - `source_messages`
+- `nws_events`
 - `messages`
+- `notifications`
 - `users_messages`
 - `delivery_attempts`
 - `outbox_events`
