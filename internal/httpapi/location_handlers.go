@@ -9,10 +9,6 @@ import (
 
 	"thundercall-go/internal/geocode"
 	"thundercall-go/internal/models"
-	locationsrepo "thundercall-go/internal/repositories/locations"
-	usercontactmethodsrepo "thundercall-go/internal/repositories/usercontactmethods"
-	userlocationsrepo "thundercall-go/internal/repositories/userlocations"
-	usersrepo "thundercall-go/internal/repositories/users"
 )
 
 type addressRequest struct {
@@ -254,94 +250,18 @@ func (s *Server) resolveLookupRequest(ctx context.Context, request locationLooku
 }
 
 func (s *Server) createUserWithLocation(ctx context.Context, accountID int64, request createUserRequest, resolved geocode.ResolvedLocation) (*models.User, *models.Location, *models.UserLocation, []models.UserContactMethod, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	defer tx.Rollback()
-
-	users := usersrepo.NewWithDBTX(tx)
-	locations := locationsrepo.NewWithDBTX(tx)
-	userLocations := userlocationsrepo.NewWithDBTX(tx)
-	contactMethods := usercontactmethodsrepo.NewWithDBTX(tx)
-
-	user := &models.User{
-		AccountID:   accountID,
-		ExternalID:  nullableTrimmedString(request.ExternalID),
-		FirstName:   nullableTrimmedString(request.FirstName),
-		LastName:    nullableTrimmedString(request.LastName),
-		DisplayName: nullableTrimmedString(request.DisplayName),
-		Title:       nullableTrimmedString(request.Title),
-		Active:      true,
-	}
-	if err := users.Create(ctx, user); err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	coverageWKT := geocode.PointWKT(resolved.Latitude, resolved.Longitude)
-	locationName := strings.TrimSpace(request.LocationName)
-	if locationName == "" {
-		locationName = defaultLocationName(user, request.Address)
-	}
-
-	latitude := resolved.Latitude
-	longitude := resolved.Longitude
-	location := &models.Location{
-		AccountID:            accountID,
-		Name:                 locationName,
-		AddressLine1:         nullableTrimmedString(request.Address.Line1),
-		AddressLine2:         nullableTrimmedString(request.Address.Line2),
-		City:                 nullableTrimmedString(request.Address.City),
-		StateCode:            nullableTrimmedString(strings.ToUpper(request.Address.StateCode)),
-		PostalCode:           nullableTrimmedString(request.Address.PostalCode),
-		CountyFIPS:           nullableTrimmedString(resolved.CountyFIPS),
-		NWSZone:              nullableTrimmedString(resolved.NWSZone),
-		Latitude:             &latitude,
-		Longitude:            &longitude,
-		CoverageWKT:          &coverageWKT,
-		IsThunderCallEnabled: true,
-		Active:               true,
-	}
-	if err := locations.Create(ctx, location); err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	subscriptionType := strings.TrimSpace(request.SubscriptionType)
-	if subscriptionType == "" {
-		subscriptionType = "address"
-	}
-	isPrimary := request.IsPrimaryLocation == nil || *request.IsPrimaryLocation
-	subscription := &models.UserLocation{
-		UserID:               user.ID,
-		LocationID:           location.ID,
-		SubscriptionType:     subscriptionType,
-		IsPrimary:            isPrimary,
-		IsThunderCallEnabled: true,
-	}
-	if err := userLocations.Create(ctx, subscription); err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	methods := make([]models.UserContactMethod, 0, 1)
-	if voicePhone := strings.TrimSpace(request.VoicePhone); voicePhone != "" {
-		method := models.UserContactMethod{
-			UserID:      user.ID,
-			Channel:     models.ChannelVoice,
-			Destination: voicePhone,
-			IsPrimary:   true,
-			IsVerified:  false,
-			Active:      true,
-		}
-		if err := contactMethods.Create(ctx, &method); err != nil {
-			return nil, nil, nil, nil, err
-		}
-		methods = append(methods, method)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, nil, nil, nil, err
-	}
-	return user, location, subscription, methods, nil
+	return s.createUserWithResolvedLocation(ctx, accountID, createResolvedUserInput{
+		ExternalID:        request.ExternalID,
+		FirstName:         request.FirstName,
+		LastName:          request.LastName,
+		DisplayName:       request.DisplayName,
+		Title:             request.Title,
+		VoicePhone:        request.VoicePhone,
+		LocationName:      request.LocationName,
+		SubscriptionType:  request.SubscriptionType,
+		IsPrimaryLocation: request.IsPrimaryLocation,
+		Address:           request.Address,
+	}, resolved)
 }
 
 func resolvedLocationPayload(resolved geocode.ResolvedLocation) resolvedLocationResponse {

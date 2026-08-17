@@ -115,7 +115,7 @@ func TestMySQLIntegrationInitialAndUpdatedPolygonCallOnlyNetNewUsers(t *testing.
 	dispatcher := NewChannelDispatcher(contactRepo, userMessageRepo, deliveryAttemptRepo, notificationRepo, nil, nil)
 	dispatcher.now = func() time.Time { return time.Date(2026, 8, 17, 15, 10, 0, 0, time.UTC) }
 	dispatcher.logf = func(string, ...any) {}
-	dispatcher.deliver = func(_ context.Context, channel models.Channel, destination string, _ *models.Message) (deliveryResult, error) {
+	dispatcher.deliver = func(_ context.Context, channel models.Channel, destination string, _ *models.Message, _ UserMatch) (deliveryResult, error) {
 		sendCalls = append(sendCalls, fmt.Sprintf("%s:%s", channel, destination))
 		return deliveryResult{
 			Provider:          providerName(channel),

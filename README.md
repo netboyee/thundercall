@@ -146,12 +146,21 @@ Environment variables:
   `THUNDERCALL_REDIS_GROUP`, `THUNDERCALL_REDIS_CONSUMER`
 - `THUNDERCALL_TWILIO_VOICE_LOG_ONLY` keeps worker voice delivery in log-only
   mode for validation runs without placing real calls
+- `THUNDERCALL_TWILIO_VOICE_TO_OVERRIDE` forces all voice calls to a single
+  test number while still resolving the real intended recipients
+- `THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL` collapses override mode to
+  one real Twilio call per incoming message while still recording every
+  intended recipient as sent in the local test pipeline
+- `TWILIO_VOICE_URL` points voice delivery at the hosted Twilio Function. The
+  worker sends `audio=<warning family>` and `id=<account.id>`. In local
+  override mode, the worker intentionally falls back to inline test TwiML so
+  test calls can still announce the intended recipient.
 - `THUNDERCALL_NWWS_USERNAME`, `THUNDERCALL_NWWS_PASSWORD`,
   `THUNDERCALL_NWWS_DOMAIN`, `THUNDERCALL_NWWS_ROOM_SERVER`,
   `THUNDERCALL_NWWS_ROOM`, `THUNDERCALL_NWWS_PRODUCTS`
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
 - `TWILIO_SMS_FROM` or `TWILIO_MESSAGING_SERVICE_SID`
-- `TWILIO_VOICE_FROM`
+- `TWILIO_VOICE_FROM`, `TWILIO_VOICE_URL`
 - `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `SENDGRID_FROM_NAME`
 
 ## MySQL Integration Tests

@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
 
+	"thundercall-go/internal/config"
 	"thundercall-go/internal/models"
+	twilioprovider "thundercall-go/internal/providers/twilio"
 )
 
 func TestChannelDispatcherDispatchDedupesLaterMessageForSameEvent(t *testing.T) {
@@ -165,6 +168,112 @@ func TestChannelDispatcherDispatchCanSendWhenNotificationExistsWithoutAttempts(t
 	}
 }
 
+func TestChannelDispatcherDispatchOverridesVoiceDestinationForTestCalls(t *testing.T) {
+	t.Parallel()
+
+	fixture := newDispatcherFixture()
+	fixture.dispatcher.twilio = twilioprovider.New(config.TwilioConfig{
+		VoiceToOverride: "+14073530340",
+	})
+
+	message := &models.Message{ID: 601, Body: "Severe weather warning in your area.", MessageType: "Severe Weather Warning"}
+	match := UserMatch{UserID: 10, LocationID: int64Ptr(6001), Channels: []models.Channel{models.ChannelVoice}}
+
+	if err := fixture.dispatcher.Dispatch(context.Background(), message, []UserMatch{match}); err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+
+	if got := len(fixture.sendCalls); got != 1 {
+		t.Fatalf("send call count = %d, want 1", got)
+	}
+	if fixture.sendCalls[0] != "voice:+14073530340" {
+		t.Fatalf("voice destination = %q, want override number", fixture.sendCalls[0])
+	}
+	if len(fixture.sendBodies) != 1 {
+		t.Fatalf("send body count = %d, want 1", len(fixture.sendBodies))
+	}
+	if !strings.Contains(fixture.sendBodies[0], "This call is meant for 1 5 5 5 0 0 0 0 0 1 0.") {
+		t.Fatalf("voice body = %q, want intended-recipient prefix", fixture.sendBodies[0])
+	}
+
+	attempt, err := fixture.deliveryAttempts.GetByUserMessageIDAndChannel(context.Background(), 1, models.ChannelVoice)
+	if err != nil {
+		t.Fatalf("GetByUserMessageIDAndChannel() error = %v", err)
+	}
+	if attempt == nil {
+		t.Fatal("delivery attempt = nil, want attempt")
+	}
+	if attempt.Destination != "+14073530340" {
+		t.Fatalf("attempt.Destination = %q, want override number", attempt.Destination)
+	}
+}
+
+func TestChannelDispatcherDispatchCollapsesOverrideCallsPerMessage(t *testing.T) {
+	t.Parallel()
+
+	fixture := newDispatcherFixture()
+	fixture.dispatcher.twilio = twilioprovider.New(config.TwilioConfig{
+		VoiceToOverride:         "+14073530340",
+		VoiceOverrideSingleCall: true,
+	})
+
+	message := &models.Message{ID: 602, Body: "Severe weather warning in your area.", MessageType: "Severe Weather Warning"}
+	matches := []UserMatch{
+		{UserID: 10, LocationID: int64Ptr(6001), Channels: []models.Channel{models.ChannelVoice}},
+		{UserID: 20, LocationID: int64Ptr(6002), Channels: []models.Channel{models.ChannelVoice}},
+	}
+
+	if err := fixture.dispatcher.Dispatch(context.Background(), message, matches); err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+
+	if got := len(fixture.sendCalls); got != 1 {
+		t.Fatalf("send call count = %d, want 1", got)
+	}
+	if fixture.sendCalls[0] != "voice:+14073530340" {
+		t.Fatalf("voice destination = %q, want override number", fixture.sendCalls[0])
+	}
+	if len(fixture.sendBodies) != 1 {
+		t.Fatalf("send body count = %d, want 1", len(fixture.sendBodies))
+	}
+	if !strings.Contains(fixture.sendBodies[0], "This test call stands in for one or more intended recipients.") {
+		t.Fatalf("voice body = %q, want collapsed-call prefix", fixture.sendBodies[0])
+	}
+	if !strings.Contains(fixture.sendBodies[0], "The first intended recipient is 1 5 5 5 0 0 0 0 0 1 0.") {
+		t.Fatalf("voice body = %q, want first recipient prefix", fixture.sendBodies[0])
+	}
+
+	firstAttempt, err := fixture.deliveryAttempts.GetByUserMessageIDAndChannel(context.Background(), 1, models.ChannelVoice)
+	if err != nil {
+		t.Fatalf("GetByUserMessageIDAndChannel(first) error = %v", err)
+	}
+	secondAttempt, err := fixture.deliveryAttempts.GetByUserMessageIDAndChannel(context.Background(), 2, models.ChannelVoice)
+	if err != nil {
+		t.Fatalf("GetByUserMessageIDAndChannel(second) error = %v", err)
+	}
+	if firstAttempt == nil || secondAttempt == nil {
+		t.Fatal("delivery attempts = nil, want attempts for both recipients")
+	}
+	if firstAttempt.Status != "sent" || secondAttempt.Status != "sent" {
+		t.Fatalf("attempt statuses = %q and %q, want both sent", firstAttempt.Status, secondAttempt.Status)
+	}
+	if firstAttempt.Destination != "+14073530340" || secondAttempt.Destination != "+14073530340" {
+		t.Fatalf("attempt destinations = %q and %q, want override number", firstAttempt.Destination, secondAttempt.Destination)
+	}
+	if firstAttempt.ProviderMessageID == nil || secondAttempt.ProviderMessageID == nil {
+		t.Fatal("provider message ids = nil, want shared provider ids")
+	}
+	if *firstAttempt.ProviderMessageID != *secondAttempt.ProviderMessageID {
+		t.Fatalf("provider message ids = %q and %q, want shared id", *firstAttempt.ProviderMessageID, *secondAttempt.ProviderMessageID)
+	}
+	if got := fixture.usersMessages.statusByMessageUser(602, 10); got != "sent" {
+		t.Fatalf("first user status = %q, want sent", got)
+	}
+	if got := fixture.usersMessages.statusByMessageUser(602, 20); got != "sent" {
+		t.Fatalf("second user status = %q, want sent", got)
+	}
+}
+
 type dispatcherFixture struct {
 	dispatcher       *ChannelDispatcher
 	contacts         *fakeContactMethodsRepository
@@ -172,6 +281,7 @@ type dispatcherFixture struct {
 	deliveryAttempts *fakeDeliveryAttemptsRepository
 	notifications    *fakeNotificationsRepository
 	sendCalls        []string
+	sendBodies       []string
 	sendErr          error
 }
 
@@ -204,8 +314,9 @@ func newDispatcherFixture() *dispatcherFixture {
 		now:              func() time.Time { return time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC) },
 		logf:             func(string, ...any) {},
 	}
-	fixture.dispatcher.deliver = func(_ context.Context, channel models.Channel, destination string, _ *models.Message) (deliveryResult, error) {
+	fixture.dispatcher.deliver = func(_ context.Context, channel models.Channel, destination string, message *models.Message, _ UserMatch) (deliveryResult, error) {
 		fixture.sendCalls = append(fixture.sendCalls, fmt.Sprintf("%s:%s", channel, destination))
+		fixture.sendBodies = append(fixture.sendBodies, message.Body)
 		if fixture.sendErr != nil {
 			return deliveryResult{}, fixture.sendErr
 		}
@@ -354,6 +465,15 @@ func (r *fakeDeliveryAttemptsRepository) UpdateStatus(_ context.Context, id int6
 	attempt.ErrorMessage = errorMessage
 	attempt.SentAt = sentAt
 	attempt.DeliveredAt = deliveredAt
+	return nil
+}
+
+func (r *fakeDeliveryAttemptsRepository) UpdateDestination(_ context.Context, id int64, destination string) error {
+	attempt := r.attempts[id]
+	if attempt == nil {
+		return fmt.Errorf("unknown attempt %d", id)
+	}
+	attempt.Destination = destination
 	return nil
 }
 

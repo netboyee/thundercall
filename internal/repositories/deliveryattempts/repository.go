@@ -84,6 +84,19 @@ func (r *Repository) UpdateStatus(ctx context.Context, id int64, status string, 
 	return err
 }
 
+func (r *Repository) UpdateDestination(ctx context.Context, id int64, destination string) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE delivery_attempts
+		 SET destination = ?,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		destination,
+		id,
+	)
+	return err
+}
+
 func (r *Repository) ListByUserMessageID(ctx context.Context, userMessageID int64) ([]models.DeliveryAttempt, error) {
 	rows, err := r.db.QueryContext(ctx, selectDeliveryAttemptSQL()+`
 	 WHERE users_message_id = ?

@@ -717,6 +717,159 @@ Notes:
 - the saved location includes a `POINT` geometry in `coverage_geometry` so polygon-based matching works immediately
 - `voicePhone` is optional, but if omitted the worker will not have a destination to call for this user
 
+## `POST /api/users/signup`
+
+Public compatibility endpoint for the existing station signup forms. This route
+accepts the station signup payload, resolves the target account from
+`accountId` in the request body, geocodes the submitted address, creates the
+user and location, and stores per-alert voice preferences from the
+`warningTypes` array.
+
+Notes:
+
+- authentication is not required
+- the same handler is also available at `POST /api/products/{productId}/records` and `POST /v1/public/signups`
+- responses from this endpoint use a top-level `message` field for compatibility with the legacy form
+
+Request body:
+
+```json
+{
+  "externalId": "RD1234567",
+  "accountId": 2,
+  "firstName": "Pat",
+  "lastName": "Smith",
+  "title": "",
+  "tcall": true,
+  "emails": [
+    {
+      "emailAddress": "pat@example.com",
+      "emailType": "Home"
+    }
+  ],
+  "phones": [
+    {
+      "phoneNumber": "4073530340",
+      "extension": "",
+      "phoneType": "Home"
+    }
+  ],
+  "addresses": [
+    {
+      "address": "123 Main St",
+      "address2": "",
+      "city": "Tyler",
+      "stateProvince": "TX",
+      "zipPostalCode": "75701",
+      "country": "US",
+      "addressType": "Home",
+      "thundercall": {
+        "phoneSetting": {
+          "name": "Home",
+          "phoneType": "Home",
+          "email": 0,
+          "enableText": false
+        },
+        "warningTypes": [0, 2]
+      }
+    }
+  ]
+}
+```
+
+Notes:
+
+- `accountId` is the new ThunderCall account id for the station receiving signups
+- `companyId` is still accepted as a fallback for older clients, but new forms should send `accountId`
+
+Warning type mapping:
+
+- `0` -> `tornado_warning`
+- `1` -> `flash_flood_warning`
+- `2` -> `severe_thunderstorm_warning`
+- `3` -> `winter_storm_warning`
+- `4` -> `tropical_storm`
+- `5` -> `special_weather_statement`
+- `6` -> `freeze_warning`
+
+Success response:
+
+```json
+{
+  "message": "Record created.",
+  "user": {
+    "id": 95199,
+    "accountId": 8,
+    "externalId": "RD1234567",
+    "firstName": "Pat",
+    "lastName": "Smith",
+    "displayName": "Pat Smith",
+    "title": null,
+    "active": true
+  },
+  "location": {
+    "id": 86420,
+    "accountId": 8,
+    "name": "Pat Smith Address",
+    "addressLine1": "123 Main St",
+    "addressLine2": null,
+    "city": "Tyler",
+    "stateCode": "TX",
+    "postalCode": "75701",
+    "countyFips": "TXC423",
+    "nwsZone": "TXZ149",
+    "latitude": 32.3513,
+    "longitude": -95.3011,
+    "coverageWKT": "POINT (32.3513 -95.3011)",
+    "isThunderCallEnabled": true,
+    "active": true
+  },
+  "subscription": {
+    "id": 17629,
+    "userId": 95199,
+    "locationId": 86420,
+    "subscriptionType": "address",
+    "isPrimary": true,
+    "isThunderCallEnabled": true
+  },
+  "contactMethods": [
+    {
+      "id": 9001,
+      "userId": 95199,
+      "channel": "voice",
+      "destination": "+14073530340",
+      "isPrimary": true,
+      "isVerified": false,
+      "active": true
+    },
+    {
+      "id": 9002,
+      "userId": 95199,
+      "channel": "email",
+      "destination": "pat@example.com",
+      "isPrimary": true,
+      "isVerified": false,
+      "active": true
+    }
+  ],
+  "resolved": {
+    "matchedAddress": "123 MAIN ST, TYLER, TX, 75701",
+    "latitude": 32.3513,
+    "longitude": -95.3011,
+    "countyFips": "TXC423",
+    "nwsZone": "TXZ149"
+  }
+}
+```
+
+Common errors:
+
+- `400 Bad Request`: missing required name, email, phone, address, or warning selection fields
+- `404 Not Found`: `accountId` did not map to an active ThunderCall account
+- `422 Unprocessable Entity`: the address could not be geocoded into both county FIPS and NWS zone
+- `502 Bad Gateway`: external geocoding or NWS enrichment failed
+- `500 Internal Server Error`: failed to create the new user or location
+
 ## `GET /v1/messages/{id}/locations`
 
 Returns the impacted locations for a specific message, along with recipient counts.

@@ -10,10 +10,14 @@ import (
 )
 
 type Repository struct {
-	db *sql.DB
+	db sqlutil.DBTX
 }
 
 func New(db *sql.DB) *Repository {
+	return &Repository{db: db}
+}
+
+func NewWithDBTX(db sqlutil.DBTX) *Repository {
 	return &Repository{db: db}
 }
 

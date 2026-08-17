@@ -95,13 +95,16 @@ type GeocodingConfig struct {
 }
 
 type TwilioConfig struct {
-	AccountSID          string
-	AuthToken           string
-	MessagingServiceSID string
-	SMSFrom             string
-	VoiceFrom           string
-	VoiceStatusCallback string
-	VoiceLogOnly        bool
+	AccountSID              string
+	AuthToken               string
+	MessagingServiceSID     string
+	SMSFrom                 string
+	VoiceFrom               string
+	VoiceURL                string
+	VoiceToOverride         string
+	VoiceOverrideSingleCall bool
+	VoiceStatusCallback     string
+	VoiceLogOnly            bool
 }
 
 func (c TwilioConfig) Enabled() bool {
@@ -166,13 +169,16 @@ func Load() (Config, error) {
 			Timeout:           durationValueOrDefault("THUNDERCALL_GEOCODER_TIMEOUT", 10*time.Second),
 		},
 		Twilio: TwilioConfig{
-			AccountSID:          os.Getenv("TWILIO_ACCOUNT_SID"),
-			AuthToken:           os.Getenv("TWILIO_AUTH_TOKEN"),
-			MessagingServiceSID: os.Getenv("TWILIO_MESSAGING_SERVICE_SID"),
-			SMSFrom:             os.Getenv("TWILIO_SMS_FROM"),
-			VoiceFrom:           os.Getenv("TWILIO_VOICE_FROM"),
-			VoiceStatusCallback: os.Getenv("TWILIO_VOICE_STATUS_CALLBACK"),
-			VoiceLogOnly:        boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_LOG_ONLY", true),
+			AccountSID:              os.Getenv("TWILIO_ACCOUNT_SID"),
+			AuthToken:               os.Getenv("TWILIO_AUTH_TOKEN"),
+			MessagingServiceSID:     os.Getenv("TWILIO_MESSAGING_SERVICE_SID"),
+			SMSFrom:                 os.Getenv("TWILIO_SMS_FROM"),
+			VoiceFrom:               os.Getenv("TWILIO_VOICE_FROM"),
+			VoiceURL:                os.Getenv("TWILIO_VOICE_URL"),
+			VoiceToOverride:         os.Getenv("THUNDERCALL_TWILIO_VOICE_TO_OVERRIDE"),
+			VoiceOverrideSingleCall: boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL", true),
+			VoiceStatusCallback:     os.Getenv("TWILIO_VOICE_STATUS_CALLBACK"),
+			VoiceLogOnly:            boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_LOG_ONLY", true),
 		},
 		SendGrid: SendGridConfig{
 			APIKey:    os.Getenv("SENDGRID_API_KEY"),

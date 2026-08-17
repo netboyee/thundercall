@@ -76,7 +76,6 @@ services:
       THUNDERCALL_REDIS_STREAM: thundercall:messages
       THUNDERCALL_REDIS_GROUP: thundercall-workers
       THUNDERCALL_REDIS_CONSUMER: worker-1
-      THUNDERCALL_TWILIO_VOICE_LOG_ONLY: "true"
     depends_on:
       mysql:
         condition: service_healthy
