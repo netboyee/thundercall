@@ -76,6 +76,8 @@ services:
       THUNDERCALL_REDIS_STREAM: thundercall:messages
       THUNDERCALL_REDIS_GROUP: thundercall-workers
       THUNDERCALL_REDIS_CONSUMER: ingest
+      THUNDERCALL_LOG_LEVEL: debug
+      THUNDERCALL_NWWS_LOG_FULL_MESSAGES: "true"
       THUNDERCALL_HEARTBEAT_PATH: /dev/shm/thundercall/ingest.heartbeat
       THUNDERCALL_HEARTBEAT_MAX_AGE: 8m
     depends_on:
