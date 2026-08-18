@@ -1,0 +1,18 @@
+exports.handler = function(context, event, callback) {
+  const twiml = new Twilio.twiml.VoiceResponse();
+
+  // The 'RecordingUrl' is passed in the event object after a recording.
+  const recordingUrl = event.RecordingUrl;
+  console.log(`Recording URL: ${recordingUrl}`);
+  // The 'From' number is also available.
+  const callerNumber = event.From;
+  console.log(`Caller number: ${callerNumber}`);
+
+  // Announce that the message has been received.
+  twiml.say('Thank you for leaving a message with us.');
+
+  // Redirect the call to the '/ThunderCallIVR' function.
+  twiml.redirect('/ThunderCallIVR');
+
+  return callback(null, twiml);
+};

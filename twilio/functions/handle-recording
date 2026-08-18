@@ -1,0 +1,19 @@
+exports.handler = function(context, event, callback) {
+  const twiml = new Twilio.twiml.VoiceResponse();
+
+  // Announce the instructions for recording the message.
+  twiml.play('https://thundercall-2287.twil.io/MaxMessageLength.mp3')
+
+  // Begin recording the message.
+  twiml.record({
+    maxLength: 45,
+    finishOnKey: '#',
+    action: '/handle-recording-complete' // This is the URL to the next step.
+  });
+
+  // If the recording times out or there's an issue, redirect back.
+  twiml.say('We did not receive a message. Goodbye.');
+  twiml.hangup();
+
+  return callback(null, twiml);
+};
