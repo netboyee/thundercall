@@ -267,6 +267,10 @@ type DeliveryAttempt struct {
 	Status            string
 	ErrorMessage      *string
 	RequestedAt       time.Time
+	DispatchAfter     time.Time
+	LeaseToken        *string
+	LeaseOwner        *string
+	LeaseExpiresAt    *time.Time
 	SentAt            *time.Time
 	DeliveredAt       *time.Time
 	CreatedAt         time.Time

@@ -123,20 +123,14 @@ func TestResolverAndDispatcherUpdateCallsOnlyNetNewPolygonRecipientsForSameEvent
 		t.Fatalf("Dispatch(updated) error = %v", err)
 	}
 
-	if got := len(fixture.sendCalls); got != 3 {
-		t.Fatalf("send call count = %d, want 3", got)
-	}
-	if got := countSendCalls(fixture.sendCalls, "voice:+15550000020"); got != 1 {
-		t.Fatalf("user 20 send count = %d, want 1", got)
-	}
-	if got := countSendCalls(fixture.sendCalls, "voice:+15550000030"); got != 1 {
-		t.Fatalf("user 30 send count = %d, want 1", got)
+	if got := len(fixture.deliveryAttempts.attempts); got != 3 {
+		t.Fatalf("delivery attempt count = %d, want 3", got)
 	}
 	if got := fixture.usersMessages.statusByMessageUser(101, 20); got != "suppressed" {
 		t.Fatalf("updated status for overlapping user = %q, want suppressed", got)
 	}
-	if got := fixture.usersMessages.statusByMessageUser(101, 30); got != "sent" {
-		t.Fatalf("updated status for new user = %q, want sent", got)
+	if got := fixture.usersMessages.statusByMessageUser(101, 30); got != "queued" {
+		t.Fatalf("updated status for new user = %q, want queued", got)
 	}
 }
 
@@ -198,16 +192,6 @@ func sortedUserIDs(matches []UserMatch) []int64 {
 	}
 	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
 	return userIDs
-}
-
-func countSendCalls(calls []string, target string) int {
-	count := 0
-	for _, call := range calls {
-		if call == target {
-			count++
-		}
-	}
-	return count
 }
 
 func stringPtr(value string) *string {

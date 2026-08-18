@@ -2,14 +2,11 @@ package thundercall
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
 
 	"thundercall-go/internal/models"
-	sendgridprovider "thundercall-go/internal/providers/sendgrid"
-	twilioprovider "thundercall-go/internal/providers/twilio"
 	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
 	notificationsrepo "thundercall-go/internal/repositories/notifications"
 	"thundercall-go/internal/repositories/sqlutil"
@@ -41,21 +38,11 @@ type notificationsRepository interface {
 	UpdateStatus(ctx context.Context, id int64, status string, lastMessageID int64, firstAttemptedAt *time.Time, sentAt *time.Time, deliveredAt *time.Time) error
 }
 
-type sendChannelFunc func(ctx context.Context, channel models.Channel, destination string, message *models.Message, match UserMatch) (deliveryResult, error)
-
-type voiceOverrideDispatchState struct {
-	liveCallPlaced    bool
-	providerMessageID string
-}
-
 type ChannelDispatcher struct {
 	contactMethods   contactMethodsRepository
 	usersMessages    usersMessagesRepository
 	deliveryAttempts deliveryAttemptsRepository
 	notifications    notificationsRepository
-	twilio           *twilioprovider.Provider
-	sendgrid         *sendgridprovider.Provider
-	deliver          sendChannelFunc
 	now              func() time.Time
 	logf             func(string, ...any)
 }
@@ -65,21 +52,15 @@ func NewChannelDispatcher(
 	usersMessages *usersmessagesrepo.Repository,
 	deliveryAttempts *deliveryattemptsrepo.Repository,
 	notifications *notificationsrepo.Repository,
-	twilio *twilioprovider.Provider,
-	sendgrid *sendgridprovider.Provider,
 ) *ChannelDispatcher {
-	dispatcher := &ChannelDispatcher{
+	return &ChannelDispatcher{
 		contactMethods:   contactMethods,
 		usersMessages:    usersMessages,
 		deliveryAttempts: deliveryAttempts,
 		notifications:    notifications,
-		twilio:           twilio,
-		sendgrid:         sendgrid,
 		now:              func() time.Time { return time.Now().UTC() },
 		logf:             log.Printf,
 	}
-	dispatcher.deliver = dispatcher.sendWithProviders
-	return dispatcher
 }
 
 func (d *ChannelDispatcher) Dispatch(ctx context.Context, message *models.Message, matches []UserMatch) error {
@@ -100,11 +81,6 @@ func (d *ChannelDispatcher) Dispatch(ctx context.Context, message *models.Messag
 	methodsByUser := make(map[int64][]models.UserContactMethod, len(userIDs))
 	for _, method := range methods {
 		methodsByUser[method.UserID] = append(methodsByUser[method.UserID], method)
-	}
-
-	var voiceOverrideState *voiceOverrideDispatchState
-	if d.twilio != nil && d.twilio.CollapseVoiceOverrideCalls() {
-		voiceOverrideState = &voiceOverrideDispatchState{}
 	}
 
 	for _, match := range matches {
@@ -159,7 +135,7 @@ func (d *ChannelDispatcher) Dispatch(ctx context.Context, message *models.Messag
 					continue
 				}
 
-				attempt, err := d.dispatchChannelForMatch(ctx, message, match, methodsByUser[match.UserID], userMessage, notification, channel, voiceOverrideState)
+				attempt, err := d.queueChannelForMatch(ctx, message, match, methodsByUser[match.UserID], userMessage, notification, channel)
 				if err != nil {
 					return err
 				}
@@ -179,7 +155,7 @@ func (d *ChannelDispatcher) Dispatch(ctx context.Context, message *models.Messag
 				continue
 			}
 
-			attempt, err := d.dispatchChannelForMatch(ctx, message, match, methodsByUser[match.UserID], userMessage, nil, channel, voiceOverrideState)
+			attempt, err := d.queueChannelForMatch(ctx, message, match, methodsByUser[match.UserID], userMessage, nil, channel)
 			if err != nil {
 				return err
 			}
@@ -225,7 +201,7 @@ func (d *ChannelDispatcher) ensureNotification(ctx context.Context, message *mod
 	return notification, created, nil
 }
 
-func (d *ChannelDispatcher) dispatchChannelForMatch(ctx context.Context, message *models.Message, match UserMatch, methods []models.UserContactMethod, userMessage *models.UserMessage, notification *models.Notification, channel models.Channel, voiceOverrideState *voiceOverrideDispatchState) (*models.DeliveryAttempt, error) {
+func (d *ChannelDispatcher) queueChannelForMatch(ctx context.Context, message *models.Message, match UserMatch, methods []models.UserContactMethod, userMessage *models.UserMessage, notification *models.Notification, channel models.Channel) (*models.DeliveryAttempt, error) {
 	attempt, created, err := d.ensureAttemptRecord(ctx, userMessage, notification, channel)
 	if err != nil {
 		return nil, err
@@ -254,114 +230,19 @@ func (d *ChannelDispatcher) dispatchChannelForMatch(ctx context.Context, message
 		return attempt, nil
 	}
 
-	deliveryDestination := method.Destination
-	deliveryMessage := message
-	collapseVoiceOverride := false
-	if channel == models.ChannelVoice && d.twilio != nil {
-		overrideDestination, overridden := d.twilio.ResolveVoiceDestination(method.Destination)
-		if overridden {
-			d.logf(
-				"worker overriding voice destination message_id=%d user_id=%d user_message_id=%d intended_destination=%s override_destination=%s",
-				message.ID,
-				match.UserID,
-				userMessage.ID,
-				method.Destination,
-				overrideDestination,
-			)
-			deliveryDestination = overrideDestination
-			copyMessage := *message
-			if voiceOverrideState != nil {
-				copyMessage.Body = d.twilio.BuildCollapsedTestVoiceBody(method.Destination, message.Body)
-				collapseVoiceOverride = true
-			} else {
-				copyMessage.Body = d.twilio.BuildTestVoiceBody(method.Destination, message.Body)
-			}
-			deliveryMessage = &copyMessage
-		}
-	}
-
-	attempt.Destination = deliveryDestination
-	if err := d.deliveryAttempts.UpdateDestination(ctx, attempt.ID, deliveryDestination); err != nil {
+	attempt.Destination = method.Destination
+	if err := d.deliveryAttempts.UpdateDestination(ctx, attempt.ID, method.Destination); err != nil {
 		return nil, err
 	}
 
-	if collapseVoiceOverride && voiceOverrideState.liveCallPlaced {
-		providerID := voiceOverrideState.providerMessageID
-		if strings.TrimSpace(providerID) == "" {
-			providerID = fmt.Sprintf("override-voice-shared-%d", message.ID)
-		}
-		now := d.now()
+	if channel == models.ChannelVoice && d.logf != nil {
 		d.logf(
-			"worker collapsing additional override voice call message_id=%d user_id=%d user_message_id=%d destination=%s shared_provider_message_id=%s",
+			"worker queued voice attempt message_id=%d user_id=%d user_message_id=%d destination=%s",
 			message.ID,
 			match.UserID,
 			userMessage.ID,
-			deliveryDestination,
-			providerID,
+			method.Destination,
 		)
-		if err := d.deliveryAttempts.UpdateStatus(ctx, attempt.ID, "sent", &providerID, nil, &now, nil); err != nil {
-			return nil, err
-		}
-		attempt.Status = "sent"
-		attempt.Provider = optionalProvider(providerName(channel))
-		attempt.ProviderMessageID = &providerID
-		attempt.ErrorMessage = nil
-		attempt.SentAt = &now
-		if notification != nil {
-			requestedAt := attempt.RequestedAt
-			if err := d.notifications.UpdateStatus(ctx, notification.ID, "sent", message.ID, &requestedAt, &now, nil); err != nil {
-				return nil, err
-			}
-		}
-		return attempt, nil
-	}
-
-	if channel == models.ChannelVoice {
-		d.logf(
-			"worker dispatching voice alert message_id=%d user_id=%d user_message_id=%d destination=%s",
-			message.ID,
-			match.UserID,
-			userMessage.ID,
-			deliveryDestination,
-		)
-	}
-
-	result, sendErr := d.sendChannel(ctx, channel, deliveryDestination, deliveryMessage, match)
-	if sendErr != nil {
-		errMessage := sendErr.Error()
-		if err := d.deliveryAttempts.UpdateStatus(ctx, attempt.ID, "failed", nil, &errMessage, nil, nil); err != nil {
-			return nil, err
-		}
-		attempt.Status = "failed"
-		attempt.ErrorMessage = &errMessage
-		if notification != nil {
-			requestedAt := attempt.RequestedAt
-			if err := d.notifications.UpdateStatus(ctx, notification.ID, "failed", message.ID, &requestedAt, nil, nil); err != nil {
-				return nil, err
-			}
-		}
-		return attempt, nil
-	}
-
-	providerID := result.ProviderMessageID
-	now := d.now()
-	if err := d.deliveryAttempts.UpdateStatus(ctx, attempt.ID, "sent", &providerID, nil, &now, nil); err != nil {
-		return nil, err
-	}
-	attempt.Status = "sent"
-	attempt.Provider = optionalProvider(result.Provider)
-	attempt.ProviderMessageID = &providerID
-	attempt.ErrorMessage = nil
-	attempt.SentAt = &now
-	if collapseVoiceOverride {
-		voiceOverrideState.liveCallPlaced = true
-		voiceOverrideState.providerMessageID = providerID
-	}
-	if notification != nil {
-		requestedAt := attempt.RequestedAt
-		if err := d.notifications.UpdateStatus(ctx, notification.ID, "sent", message.ID, &requestedAt, &now, nil); err != nil {
-			return nil, err
-		}
 	}
 	return attempt, nil
 }
@@ -375,6 +256,7 @@ func (d *ChannelDispatcher) ensureAttemptRecord(ctx context.Context, userMessage
 		Provider:      optionalProvider(providerName(channel)),
 		Status:        "queued",
 		RequestedAt:   d.now(),
+		DispatchAfter: d.now(),
 	}
 	if notification != nil {
 		attempt.NotificationID = &notification.ID
@@ -397,48 +279,6 @@ func (d *ChannelDispatcher) ensureAttemptRecord(ctx context.Context, userMessage
 	}
 
 	return attempt, true, nil
-}
-
-func (d *ChannelDispatcher) sendChannel(ctx context.Context, channel models.Channel, destination string, message *models.Message, match UserMatch) (deliveryResult, error) {
-	if d.deliver == nil {
-		return deliveryResult{}, fmt.Errorf("channel sender is not configured")
-	}
-	return d.deliver(ctx, channel, destination, message, match)
-}
-
-func (d *ChannelDispatcher) sendWithProviders(ctx context.Context, channel models.Channel, destination string, message *models.Message, match UserMatch) (deliveryResult, error) {
-	switch channel {
-	case models.ChannelSMS:
-		if d.twilio == nil {
-			return deliveryResult{}, fmt.Errorf("twilio sms provider is not configured")
-		}
-		result, err := d.twilio.SendSMS(ctx, destination, message.Body)
-		return deliveryResult{Provider: result.Provider, ProviderMessageID: result.ProviderMessageID, Status: result.Status}, err
-	case models.ChannelVoice:
-		if d.twilio == nil {
-			return deliveryResult{}, fmt.Errorf("twilio voice provider is not configured")
-		}
-		result, err := d.twilio.SendVoice(ctx, twilioprovider.VoiceRequest{
-			To:            destination,
-			Body:          message.Body,
-			EventCode:     message.EventCode,
-			AlertTypeCode: message.AlertTypeCode,
-			AccountID:     match.AccountID,
-		})
-		return deliveryResult{Provider: result.Provider, ProviderMessageID: result.ProviderMessageID, Status: result.Status}, err
-	case models.ChannelEmail:
-		if d.sendgrid == nil {
-			return deliveryResult{}, fmt.Errorf("sendgrid provider is not configured")
-		}
-		subject := strings.TrimSpace(stringValue(message.Title))
-		if subject == "" {
-			subject = message.MessageType
-		}
-		result, err := d.sendgrid.SendEmail(ctx, destination, subject, message.Body)
-		return deliveryResult{Provider: result.Provider, ProviderMessageID: result.ProviderMessageID, Status: result.Status}, err
-	default:
-		return deliveryResult{}, fmt.Errorf("unsupported delivery channel %q", channel)
-	}
 }
 
 func selectContactMethod(methods []models.UserContactMethod, channel models.Channel) (models.UserContactMethod, bool) {
@@ -524,12 +364,6 @@ func summarizeUserMessage(channels []models.Channel, attemptsByChannel map[model
 		return "failed", nil
 	}
 	return "skipped", nil
-}
-
-type deliveryResult struct {
-	Provider          string
-	ProviderMessageID string
-	Status            string
 }
 
 func latestAttempt(attempts []models.DeliveryAttempt) *models.DeliveryAttempt {

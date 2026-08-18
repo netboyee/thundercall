@@ -5,7 +5,6 @@ package thundercall
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"testing"
 	"time"
 
@@ -111,18 +110,9 @@ func TestMySQLIntegrationInitialAndUpdatedPolygonCallOnlyNetNewUsers(t *testing.
 
 	resolver := NewSQLRecipientResolver(locationRepo, userLocationRepo, accountSettingsRepo, userSettingsRepo)
 
-	var sendCalls []string
-	dispatcher := NewChannelDispatcher(contactRepo, userMessageRepo, deliveryAttemptRepo, notificationRepo, nil, nil)
+	dispatcher := NewChannelDispatcher(contactRepo, userMessageRepo, deliveryAttemptRepo, notificationRepo)
 	dispatcher.now = func() time.Time { return time.Date(2026, 8, 17, 15, 10, 0, 0, time.UTC) }
 	dispatcher.logf = func(string, ...any) {}
-	dispatcher.deliver = func(_ context.Context, channel models.Channel, destination string, _ *models.Message, _ UserMatch) (deliveryResult, error) {
-		sendCalls = append(sendCalls, fmt.Sprintf("%s:%s", channel, destination))
-		return deliveryResult{
-			Provider:          providerName(channel),
-			ProviderMessageID: fmt.Sprintf("provider-%d", len(sendCalls)),
-			Status:            "sent",
-		}, nil
-	}
 
 	initialMatches, err := resolver.ResolveRecipients(ctx, initialMessage)
 	if err != nil {
@@ -146,18 +136,8 @@ func TestMySQLIntegrationInitialAndUpdatedPolygonCallOnlyNetNewUsers(t *testing.
 		t.Fatalf("Dispatch(updated) error = %v", err)
 	}
 
-	if got := len(sendCalls); got != 3 {
-		t.Fatalf("send call count = %d, want 3", got)
-	}
-	if got := countSendCalls(sendCalls, "voice:+15550000002"); got != 1 {
-		t.Fatalf("user2 send count = %d, want 1", got)
-	}
-	if got := countSendCalls(sendCalls, "voice:+15550000003"); got != 1 {
-		t.Fatalf("user3 send count = %d, want 1", got)
-	}
-
 	assertUserMessageStatus(t, ctx, userMessageRepo, updatedMessage.ID, user2.ID, "suppressed")
-	assertUserMessageStatus(t, ctx, userMessageRepo, updatedMessage.ID, user3.ID, "sent")
+	assertUserMessageStatus(t, ctx, userMessageRepo, updatedMessage.ID, user3.ID, "queued")
 
 	assertNotificationWindow(t, ctx, notificationRepo, deliveryAttemptRepo, event.ID, user1.ID, initialMessage.ID, initialMessage.ID)
 	assertNotificationWindow(t, ctx, notificationRepo, deliveryAttemptRepo, event.ID, user2.ID, initialMessage.ID, updatedMessage.ID)
@@ -260,8 +240,8 @@ func assertNotificationWindow(t *testing.T, ctx context.Context, repo *notificat
 			wantLastMessageID,
 		)
 	}
-	if notification.Status != "sent" {
-		t.Fatalf("notification status for user=%d = %q, want sent", userID, notification.Status)
+	if notification.Status != "queued" {
+		t.Fatalf("notification status for user=%d = %q, want queued", userID, notification.Status)
 	}
 
 	deliveryAttempts, err := attempts.ListByNotificationID(ctx, notification.ID)
@@ -271,8 +251,8 @@ func assertNotificationWindow(t *testing.T, ctx context.Context, repo *notificat
 	if len(deliveryAttempts) != 1 {
 		t.Fatalf("delivery attempts for user=%d = %d, want 1", userID, len(deliveryAttempts))
 	}
-	if deliveryAttempts[0].Status != "sent" {
-		t.Fatalf("delivery attempt status for user=%d = %q, want sent", userID, deliveryAttempts[0].Status)
+	if deliveryAttempts[0].Status != "queued" {
+		t.Fatalf("delivery attempt status for user=%d = %q, want queued", userID, deliveryAttempts[0].Status)
 	}
 }
 

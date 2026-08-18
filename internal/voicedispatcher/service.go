@@ -1,0 +1,232 @@
+package voicedispatcher
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	twilioprovider "thundercall-go/internal/providers/twilio"
+	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
+)
+
+type attemptsRepository interface {
+	GetLatestSentVoiceAttemptByMessageID(ctx context.Context, messageID int64) (*deliveryattemptsrepo.VoiceDispatchRecord, error)
+	UpdateStatus(ctx context.Context, id int64, status string, providerMessageID *string, errorMessage *string, sentAt *time.Time, deliveredAt *time.Time) error
+	Requeue(ctx context.Context, id int64, errorMessage *string, dispatchAfter time.Time) error
+}
+
+type usersMessagesRepository interface {
+	UpdateStatus(ctx context.Context, id int64, status string, deliveredAt *time.Time) error
+}
+
+type notificationsRepository interface {
+	UpdateStatus(ctx context.Context, id int64, status string, lastMessageID int64, firstAttemptedAt *time.Time, sentAt *time.Time, deliveredAt *time.Time) error
+}
+
+type voiceSender interface {
+	SendVoice(ctx context.Context, request twilioprovider.VoiceRequest) (twilioprovider.Result, error)
+	ResolveVoiceDestination(to string) (string, bool)
+	BuildTestVoiceBody(intendedTo string, body string) string
+	BuildCollapsedTestVoiceBody(intendedTo string, body string) string
+	CollapseVoiceOverrideCalls() bool
+}
+
+type Service struct {
+	attempts      attemptsRepository
+	usersMessages usersMessagesRepository
+	notifications notificationsRepository
+	sender        voiceSender
+	retryDelay    time.Duration
+	waiter        turnWaiter
+	now           func() time.Time
+	logf          func(string, ...any)
+
+	mu                 sync.Mutex
+	collapsedByMessage map[int64]string
+}
+
+func NewService(
+	attempts attemptsRepository,
+	usersMessages usersMessagesRepository,
+	notifications notificationsRepository,
+	sender voiceSender,
+	waiter turnWaiter,
+	retryDelay time.Duration,
+) *Service {
+	if retryDelay <= 0 {
+		retryDelay = 30 * time.Second
+	}
+
+	return &Service{
+		attempts:           attempts,
+		usersMessages:      usersMessages,
+		notifications:      notifications,
+		sender:             sender,
+		retryDelay:         retryDelay,
+		waiter:             waiter,
+		now:                func() time.Time { return time.Now().UTC() },
+		logf:               log.Printf,
+		collapsedByMessage: make(map[int64]string),
+	}
+}
+
+func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord) error {
+	if s.attempts == nil {
+		return fmt.Errorf("delivery attempts repository is required")
+	}
+	if s.usersMessages == nil {
+		return fmt.Errorf("users_messages repository is required")
+	}
+	if s.sender == nil {
+		return fmt.Errorf("voice sender is required")
+	}
+
+	if providerMessageID, ok, err := s.collapsedProviderMessageID(ctx, record); err != nil {
+		return err
+	} else if ok {
+		return s.markSent(ctx, record, providerMessageID, false)
+	}
+
+	sendTo := record.Attempt.Destination
+	body := record.MessageBody
+	if overrideDestination, overridden := s.sender.ResolveVoiceDestination(record.Attempt.Destination); overridden {
+		sendTo = overrideDestination
+		if s.sender.CollapseVoiceOverrideCalls() {
+			body = s.sender.BuildCollapsedTestVoiceBody(record.Attempt.Destination, record.MessageBody)
+		} else {
+			body = s.sender.BuildTestVoiceBody(record.Attempt.Destination, record.MessageBody)
+		}
+	}
+
+	if s.waiter != nil {
+		if err := s.waiter.Wait(ctx); err != nil {
+			return err
+		}
+	}
+
+	if s.logf != nil {
+		s.logf(
+			"voice-dispatcher placing call attempt_id=%d message_id=%d user_id=%d intended_destination=%s send_to=%s",
+			record.Attempt.ID,
+			record.MessageID,
+			record.UserID,
+			record.Attempt.Destination,
+			sendTo,
+		)
+	}
+
+	result, err := s.sender.SendVoice(ctx, twilioprovider.VoiceRequest{
+		To:            sendTo,
+		Body:          body,
+		EventCode:     record.EventCode,
+		AlertTypeCode: record.AlertTypeCode,
+		AccountID:     int64Value(record.AccountID),
+	})
+	if err != nil {
+		return s.handleSendError(ctx, record, err)
+	}
+
+	return s.markSent(ctx, record, result.ProviderMessageID, true)
+}
+
+func (s *Service) collapsedProviderMessageID(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord) (string, bool, error) {
+	if !s.sender.CollapseVoiceOverrideCalls() || record.MessageID <= 0 {
+		return "", false, nil
+	}
+
+	s.mu.Lock()
+	cached, ok := s.collapsedByMessage[record.MessageID]
+	s.mu.Unlock()
+	if ok && strings.TrimSpace(cached) != "" {
+		return cached, true, nil
+	}
+
+	existing, err := s.attempts.GetLatestSentVoiceAttemptByMessageID(ctx, record.MessageID)
+	if err != nil {
+		return "", false, err
+	}
+	if existing == nil || existing.Attempt.ProviderMessageID == nil || strings.TrimSpace(*existing.Attempt.ProviderMessageID) == "" {
+		return "", false, nil
+	}
+
+	providerMessageID := strings.TrimSpace(*existing.Attempt.ProviderMessageID)
+	s.mu.Lock()
+	s.collapsedByMessage[record.MessageID] = providerMessageID
+	s.mu.Unlock()
+	return providerMessageID, true, nil
+}
+
+func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, sendErr error) error {
+	errMessage := sendErr.Error()
+	if twilioprovider.IsRetryableError(sendErr) {
+		dispatchAfter := s.now().Add(s.retryDelay)
+		if err := s.attempts.Requeue(ctx, record.Attempt.ID, &errMessage, dispatchAfter); err != nil {
+			return err
+		}
+		if record.Attempt.NotificationID != nil && s.notifications != nil {
+			requestedAt := record.Attempt.RequestedAt
+			if err := s.notifications.UpdateStatus(ctx, *record.Attempt.NotificationID, "queued", record.MessageID, &requestedAt, nil, nil); err != nil {
+				return err
+			}
+		}
+		if s.logf != nil {
+			s.logf(
+				"voice-dispatcher requeued retryable call attempt_id=%d message_id=%d user_id=%d dispatch_after=%s error=%v",
+				record.Attempt.ID,
+				record.MessageID,
+				record.UserID,
+				dispatchAfter.Format(time.RFC3339),
+				sendErr,
+			)
+		}
+		return nil
+	}
+
+	if err := s.attempts.UpdateStatus(ctx, record.Attempt.ID, "failed", nil, &errMessage, nil, nil); err != nil {
+		return err
+	}
+	if err := s.usersMessages.UpdateStatus(ctx, record.Attempt.UserMessageID, "failed", nil); err != nil {
+		return err
+	}
+	if record.Attempt.NotificationID != nil && s.notifications != nil {
+		requestedAt := record.Attempt.RequestedAt
+		if err := s.notifications.UpdateStatus(ctx, *record.Attempt.NotificationID, "failed", record.MessageID, &requestedAt, nil, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) markSent(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, providerMessageID string, cacheCollapsed bool) error {
+	now := s.now()
+	if err := s.attempts.UpdateStatus(ctx, record.Attempt.ID, "sent", &providerMessageID, nil, &now, nil); err != nil {
+		return err
+	}
+	if err := s.usersMessages.UpdateStatus(ctx, record.Attempt.UserMessageID, "sent", &now); err != nil {
+		return err
+	}
+	if record.Attempt.NotificationID != nil && s.notifications != nil {
+		requestedAt := record.Attempt.RequestedAt
+		if err := s.notifications.UpdateStatus(ctx, *record.Attempt.NotificationID, "sent", record.MessageID, &requestedAt, &now, nil); err != nil {
+			return err
+		}
+	}
+
+	if cacheCollapsed && s.sender.CollapseVoiceOverrideCalls() && record.MessageID > 0 && strings.TrimSpace(providerMessageID) != "" {
+		s.mu.Lock()
+		s.collapsedByMessage[record.MessageID] = providerMessageID
+		s.mu.Unlock()
+	}
+
+	return nil
+}
+
+func int64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}

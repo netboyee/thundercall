@@ -14,6 +14,21 @@ type Repository struct {
 	db sqlutil.DBTX
 }
 
+type VoiceDispatchRecord struct {
+	Attempt        models.DeliveryAttempt
+	MessageID      int64
+	AccountID      *int64
+	UserID         int64
+	EventCode      string
+	AlertTypeCode  string
+	MessageBody    string
+	MessageType    string
+	MessageTitle   *string
+	ReceivedAt     time.Time
+	NWSEventID     *int64
+	NotificationID *int64
+}
+
 func New(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
@@ -26,13 +41,19 @@ func (r *Repository) Create(ctx context.Context, attempt *models.DeliveryAttempt
 	if attempt.AttemptNumber <= 0 {
 		attempt.AttemptNumber = 1
 	}
+	if attempt.DispatchAfter.IsZero() {
+		attempt.DispatchAfter = attempt.RequestedAt
+	}
+	if attempt.DispatchAfter.IsZero() {
+		attempt.DispatchAfter = time.Now().UTC()
+	}
 
 	result, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO delivery_attempts (
 			users_message_id, notification_id, channel, attempt_number, destination, provider, provider_message_id,
-			status, error_message, requested_at, sent_at, delivered_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			status, error_message, requested_at, dispatch_after, lease_token, lease_owner, lease_expires_at, sent_at, delivered_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.UserMessageID,
 		sqlutil.Int64Value(attempt.NotificationID),
 		string(attempt.Channel),
@@ -43,6 +64,10 @@ func (r *Repository) Create(ctx context.Context, attempt *models.DeliveryAttempt
 		attempt.Status,
 		sqlutil.StringValue(attempt.ErrorMessage),
 		attempt.RequestedAt,
+		attempt.DispatchAfter,
+		sqlutil.StringValue(attempt.LeaseToken),
+		sqlutil.StringValue(attempt.LeaseOwner),
+		sqlutil.TimeValue(attempt.LeaseExpiresAt),
 		sqlutil.TimeValue(attempt.SentAt),
 		sqlutil.TimeValue(attempt.DeliveredAt),
 	)
@@ -58,6 +83,11 @@ func (r *Repository) Create(ctx context.Context, attempt *models.DeliveryAttempt
 	return nil
 }
 
+func (r *Repository) GetByID(ctx context.Context, id int64) (*models.DeliveryAttempt, error) {
+	row := r.db.QueryRowContext(ctx, selectDeliveryAttemptSQL()+` WHERE id = ?`, id)
+	return scanDeliveryAttempt(row)
+}
+
 func (r *Repository) GetByUserMessageIDAndChannel(ctx context.Context, userMessageID int64, channel models.Channel) (*models.DeliveryAttempt, error) {
 	row := r.db.QueryRowContext(ctx, selectDeliveryAttemptSQL()+` WHERE users_message_id = ? AND channel = ? ORDER BY attempt_number DESC, id DESC LIMIT 1`, userMessageID, string(channel))
 	return scanDeliveryAttempt(row)
@@ -70,6 +100,9 @@ func (r *Repository) UpdateStatus(ctx context.Context, id int64, status string, 
 		 SET status = ?,
 		     provider_message_id = ?,
 		     error_message = ?,
+		     lease_token = NULL,
+		     lease_owner = NULL,
+		     lease_expires_at = NULL,
 		     sent_at = ?,
 		     delivered_at = ?,
 		     updated_at = CURRENT_TIMESTAMP
@@ -92,6 +125,25 @@ func (r *Repository) UpdateDestination(ctx context.Context, id int64, destinatio
 		     updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		destination,
+		id,
+	)
+	return err
+}
+
+func (r *Repository) Requeue(ctx context.Context, id int64, errorMessage *string, dispatchAfter time.Time) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE delivery_attempts
+		 SET status = 'queued',
+		     error_message = ?,
+		     dispatch_after = ?,
+		     lease_token = NULL,
+		     lease_owner = NULL,
+		     lease_expires_at = NULL,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		sqlutil.StringValue(errorMessage),
+		dispatchAfter,
 		id,
 	)
 	return err
@@ -139,6 +191,99 @@ func (r *Repository) ListByNotificationID(ctx context.Context, notificationID in
 	return attempts, rows.Err()
 }
 
+func (r *Repository) ClaimQueuedVoiceAttempts(ctx context.Context, leaseToken string, leaseOwner string, now time.Time, leaseDuration time.Duration, limit int) ([]VoiceDispatchRecord, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	leaseExpiresAt := now.Add(leaseDuration)
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE delivery_attempts da
+		JOIN (
+			SELECT ranked.id
+			FROM (
+				SELECT
+					da.id,
+					ROW_NUMBER() OVER (
+						PARTITION BY um.message_id
+						ORDER BY da.requested_at, da.id
+					) AS queue_rank,
+					m.received_at
+				FROM delivery_attempts da
+				INNER JOIN users_messages um
+					ON um.id = da.users_message_id
+				INNER JOIN messages m
+					ON m.id = um.message_id
+				WHERE da.channel = 'voice'
+				  AND da.status = 'queued'
+				  AND da.dispatch_after <= ?
+				  AND (da.lease_expires_at IS NULL OR da.lease_expires_at <= ?)
+			) ranked
+			ORDER BY ranked.queue_rank, ranked.received_at, ranked.id
+			LIMIT ?
+		) picked
+			ON picked.id = da.id
+		SET da.status = 'dispatching',
+		    da.lease_token = ?,
+		    da.lease_owner = ?,
+		    da.lease_expires_at = ?,
+		    da.updated_at = CURRENT_TIMESTAMP
+		WHERE da.channel = 'voice'
+		  AND da.status = 'queued'
+		  AND da.dispatch_after <= ?
+		  AND (da.lease_expires_at IS NULL OR da.lease_expires_at <= ?)`,
+		now,
+		now,
+		limit,
+		leaseToken,
+		leaseOwner,
+		leaseExpiresAt,
+		now,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		selectVoiceDispatchSQL()+`
+		WHERE da.lease_token = ?
+		ORDER BY queue_rank, m.received_at, da.id`,
+		leaseToken,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []VoiceDispatchRecord
+	for rows.Next() {
+		record, err := scanVoiceDispatchRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *record)
+	}
+
+	return records, rows.Err()
+}
+
+func (r *Repository) GetLatestSentVoiceAttemptByMessageID(ctx context.Context, messageID int64) (*VoiceDispatchRecord, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		selectVoiceDispatchSQL()+`
+		WHERE um.message_id = ?
+		  AND da.channel = 'voice'
+		  AND da.status = 'sent'
+		ORDER BY da.sent_at DESC, da.id DESC
+		LIMIT 1`,
+		messageID,
+	)
+	return scanVoiceDispatchRecord(row)
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -146,8 +291,52 @@ type scanner interface {
 func selectDeliveryAttemptSQL() string {
 	return `
 		SELECT id, users_message_id, notification_id, channel, attempt_number, destination, provider, provider_message_id,
-		       status, error_message, requested_at, sent_at, delivered_at, created_at, updated_at
+		       status, error_message, requested_at, dispatch_after, lease_token, lease_owner, lease_expires_at,
+		       sent_at, delivered_at, created_at, updated_at
 		FROM delivery_attempts`
+}
+
+func selectVoiceDispatchSQL() string {
+	return `
+		SELECT
+			da.id,
+			da.users_message_id,
+			da.notification_id,
+			da.channel,
+			da.attempt_number,
+			da.destination,
+			da.provider,
+			da.provider_message_id,
+			da.status,
+			da.error_message,
+			da.requested_at,
+			da.dispatch_after,
+			da.lease_token,
+			da.lease_owner,
+			da.lease_expires_at,
+			da.sent_at,
+			da.delivered_at,
+			da.created_at,
+			da.updated_at,
+			um.message_id,
+			um.user_id,
+			m.account_id,
+			m.nws_event_id,
+			m.event_code,
+			m.alert_type_code,
+			m.message_type,
+			m.title,
+			m.body,
+			m.received_at,
+			ROW_NUMBER() OVER (
+				PARTITION BY um.message_id
+				ORDER BY da.requested_at, da.id
+			) AS queue_rank
+		FROM delivery_attempts da
+		INNER JOIN users_messages um
+			ON um.id = da.users_message_id
+		INNER JOIN messages m
+			ON m.id = um.message_id`
 }
 
 func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
@@ -158,7 +347,11 @@ func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 		provider          sql.NullString
 		providerMessageID sql.NullString
 		errorMessage      sql.NullString
+		leaseToken        sql.NullString
+		leaseOwner        sql.NullString
 		sentAt            sql.NullTime
+		dispatchAfter     sql.NullTime
+		leaseExpiresAt    sql.NullTime
 		deliveredAt       sql.NullTime
 	)
 
@@ -174,6 +367,10 @@ func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 		&attempt.Status,
 		&errorMessage,
 		&attempt.RequestedAt,
+		&dispatchAfter,
+		&leaseToken,
+		&leaseOwner,
+		&leaseExpiresAt,
 		&sentAt,
 		&deliveredAt,
 		&attempt.CreatedAt,
@@ -190,7 +387,94 @@ func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 	attempt.Provider = sqlutil.StringPtr(provider)
 	attempt.ProviderMessageID = sqlutil.StringPtr(providerMessageID)
 	attempt.ErrorMessage = sqlutil.StringPtr(errorMessage)
+	attempt.DispatchAfter = timeOrZero(dispatchAfter)
+	attempt.LeaseToken = sqlutil.StringPtr(leaseToken)
+	attempt.LeaseOwner = sqlutil.StringPtr(leaseOwner)
+	attempt.LeaseExpiresAt = sqlutil.TimePtr(leaseExpiresAt)
 	attempt.SentAt = sqlutil.TimePtr(sentAt)
 	attempt.DeliveredAt = sqlutil.TimePtr(deliveredAt)
 	return &attempt, nil
+}
+
+func scanVoiceDispatchRecord(s scanner) (*VoiceDispatchRecord, error) {
+	var (
+		record            VoiceDispatchRecord
+		notificationID    sql.NullInt64
+		channel           string
+		provider          sql.NullString
+		providerMessageID sql.NullString
+		errorMessage      sql.NullString
+		dispatchAfter     sql.NullTime
+		leaseToken        sql.NullString
+		leaseOwner        sql.NullString
+		leaseExpiresAt    sql.NullTime
+		sentAt            sql.NullTime
+		deliveredAt       sql.NullTime
+		accountID         sql.NullInt64
+		nwsEventID        sql.NullInt64
+		title             sql.NullString
+		queueRank         int
+	)
+
+	if err := s.Scan(
+		&record.Attempt.ID,
+		&record.Attempt.UserMessageID,
+		&notificationID,
+		&channel,
+		&record.Attempt.AttemptNumber,
+		&record.Attempt.Destination,
+		&provider,
+		&providerMessageID,
+		&record.Attempt.Status,
+		&errorMessage,
+		&record.Attempt.RequestedAt,
+		&dispatchAfter,
+		&leaseToken,
+		&leaseOwner,
+		&leaseExpiresAt,
+		&sentAt,
+		&deliveredAt,
+		&record.Attempt.CreatedAt,
+		&record.Attempt.UpdatedAt,
+		&record.MessageID,
+		&record.UserID,
+		&accountID,
+		&nwsEventID,
+		&record.EventCode,
+		&record.AlertTypeCode,
+		&record.MessageType,
+		&title,
+		&record.MessageBody,
+		&record.ReceivedAt,
+		&queueRank,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	record.Attempt.Channel = models.Channel(channel)
+	record.Attempt.NotificationID = sqlutil.Int64Ptr(notificationID)
+	record.Attempt.Provider = sqlutil.StringPtr(provider)
+	record.Attempt.ProviderMessageID = sqlutil.StringPtr(providerMessageID)
+	record.Attempt.ErrorMessage = sqlutil.StringPtr(errorMessage)
+	record.Attempt.DispatchAfter = timeOrZero(dispatchAfter)
+	record.Attempt.LeaseToken = sqlutil.StringPtr(leaseToken)
+	record.Attempt.LeaseOwner = sqlutil.StringPtr(leaseOwner)
+	record.Attempt.LeaseExpiresAt = sqlutil.TimePtr(leaseExpiresAt)
+	record.Attempt.SentAt = sqlutil.TimePtr(sentAt)
+	record.Attempt.DeliveredAt = sqlutil.TimePtr(deliveredAt)
+	record.AccountID = sqlutil.Int64Ptr(accountID)
+	record.NWSEventID = sqlutil.Int64Ptr(nwsEventID)
+	record.NotificationID = record.Attempt.NotificationID
+	record.MessageTitle = sqlutil.StringPtr(title)
+	return &record, nil
+}
+
+func timeOrZero(value sql.NullTime) time.Time {
+	if !value.Valid {
+		return time.Time{}
+	}
+	return value.Time
 }

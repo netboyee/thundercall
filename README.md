@@ -1,88 +1,124 @@
 # thundercall-go
 
-`thundercall-go` is a standalone rewrite of ThunderCall focused on a split
-runtime:
+`thundercall-go` is the standalone ThunderCall runtime. It is currently built
+around four Go processes plus MySQL and Redis:
 
-- `api` exposes operator-facing authentication and read APIs for alert history,
-  delivery metrics, impacted locations, and results drill-downs
-- `ingest` connects to NWWS over XMPP, parses messages, persists normalized
-  alerts, and publishes work to Redis Streams
-- `worker` consumes queued alerts, resolves recipients, and delivers
-  SMS/voice/email through Twilio and SendGrid
-- MySQL holds the source-of-truth data model for accounts, users, locations,
-  messages, and deliveries
+- `api`: operator API, public signup API, user/location creation, and
+  message-lookup endpoints
+- `ingest`: NWWS XMPP consumer, parser, normalizer, and outbox publisher
+- `worker`: recipient resolution and delivery-attempt planning
+- `voice-dispatcher`: paced Twilio voice execution and retry handling
+- `mysql`: source-of-truth data store
+- `redis`: queue transport for accepted-message work
 
-## Why This Repo Exists
+## Current Product Scope
 
-The legacy implementation couples inbound weather alerts to OneHub-specific
-concepts like `Record`, `RecordLocation`, `CompanyThunderCall`, `MsgrJob`, and
-`RecordAccessList`.
+Implemented today:
 
-This repo starts the separation by:
+- NWWS-only ingest
+- Configurable allowed NWWS products, currently defaulting to
+  `SVR,FFW,TOR,WSW,TSU`
+- Persistence for `source_messages`, `nws_events`, `messages`,
+  `notifications`, `users_messages`, `delivery_attempts`, and
+  `outbox_events`
+- Polygon/FIPS/NWS-zone recipient resolution
+- Event-aware dedupe so later updates only call net-new recipients for the
+  same event/channel
+- Twilio voice delivery with:
+  - dry-run mode
+  - single-number override mode
+  - optional single-call collapse in override mode
+  - paced dispatch with configurable CPS
+- Public signup flow for station forms
+- Operator API for auth, dashboard summaries, message history, message
+  lookups, and location inspection
+- Docker health checks and host-run MySQL backup script
 
-- renaming `Record` to `user`
-- renaming `Company` tenancy concerns to `account`
-- collapsing delivery orchestration into a direct `message -> user_messages ->
-  delivery_attempts` flow
+Not active yet:
 
-## What Is Implemented Today
+- SMS execution
+- email execution
 
-- NWWS XMPP consumer in Go using `mellium.im/xmpp`
-- NWWS parsing and normalization based on the legacy fixtures and reference PDFs
-- MySQL persistence for `source_messages`, `messages`, `users_messages`, and
-  `delivery_attempts`
-- Redis Streams outbox publishing and worker consumption
-- Twilio SMS/voice and SendGrid email provider integrations
-- Operator API with login/logout, bearer-token sessions, message history,
-  delivery summaries, message results, and location listing endpoints
-- NWWS-focused parser tests covering segmented, non-segmented, and severe
-  weather products
+There is still some placeholder/provider code for SMS/email, but the running
+pipeline is voice-first right now.
 
 ## Project Layout
 
 ```text
-cmd/api/                operator API binary
-cmd/ingest/             NWWS ingest binary
-cmd/worker/             delivery worker binary
-internal/config/        env-based configuration
-internal/database/      MySQL connection setup
-internal/events/        queue event payloads
-internal/httpapi/       auth/session handling and operator API endpoints
-internal/ingest/        NWWS ingest pipeline and outbox relay
-internal/models/        MySQL-backed resource models
-internal/nwws/          NWWS parser, normalization, fixtures, tests
-internal/queue/         Redis Streams queue client
-internal/repositories/  resource repositories, including API auth tables
-internal/thundercall/   shared delivery and recipient-resolution logic
-internal/worker/        queued delivery execution
-db/schema.sql           initial MySQL InnoDB schema
+cmd/api/                     API binary
+cmd/ingest/                  ingest binary
+cmd/voice-dispatcher/        voice dispatcher binary
+cmd/worker/                  worker binary
+db/schema.sql                current bootstrap schema
+docs/                        reference docs
+internal/config/             env-based config loading
+internal/database/           MySQL connection setup
+internal/events/             queue event payloads
+internal/geocode/            Census + weather.gov lookups
+internal/health/             heartbeat and health-check helpers
+internal/httpapi/            HTTP handlers and query layer
+internal/ingest/             ingest pipeline and outbox relay
+internal/models/             shared data models
+internal/nwws/               parser, normalization, fixtures
+internal/providers/          Twilio and SendGrid providers
+internal/queue/redisstreams/ Redis Streams client
+internal/repositories/       table repositories
+internal/testmysql/          disposable MySQL test harness
+internal/thundercall/        recipient resolution and planning logic
+internal/voicedispatcher/    voice claim/pacing/send flow
+internal/worker/             worker queue consumer
+ops/                         backup and cron examples
+API.md                       request/response details for HTTP API
+compose.yaml                 local Docker stack
+Dockerfile                   multi-stage image build
 ```
 
+## Commands
+
+The repo currently ships these binaries:
+
+- `go run ./cmd/api`
+  - default command: serve API
+  - subcommands:
+    - `create-user`
+    - `healthcheck`
+- `go run ./cmd/ingest`
+  - default command: start NWWS ingest loop
+  - subcommands:
+    - `healthcheck`
+- `go run ./cmd/worker`
+  - default command: start Redis-backed planning worker
+  - subcommands:
+    - `healthcheck`
+- `go run ./cmd/voice-dispatcher`
+  - default command: claim queued voice attempts and call Twilio
+  - subcommands:
+    - `healthcheck`
+
 ## Running Locally
+
+Start each process directly:
 
 ```bash
 go run ./cmd/api
 go run ./cmd/ingest
 go run ./cmd/worker
+go run ./cmd/voice-dispatcher
+```
+
+Create an API operator user:
+
+```bash
+go run ./cmd/api create-user \
+  --account-id 1 \
+  --email admin@example.com \
+  --password 'change-me' \
+  --display-name 'ThunderCall Admin'
 ```
 
 ## Running With Docker
 
-Builds for the three service binaries live in a single multi-stage
-[Dockerfile](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/Dockerfile).
-The compose stack in
-[compose.yaml](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/compose.yaml)
-starts:
-
-- `mysql` with the schema from
-  [db/schema.sql](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/db/schema.sql)
-- `redis`
-- `api`
-- `worker`
-- `ingest` behind the optional `nwws` profile, since it requires live NWWS
-  credentials
-
-Set up the Docker env file:
+Copy the example env file:
 
 ```bash
 cp .env.docker.example .env.docker
@@ -94,7 +130,16 @@ Start the default local stack:
 docker compose up --build
 ```
 
-Start the NWWS ingest service too:
+That starts:
+
+- `mysql`
+- `redis`
+- `api`
+- `worker`
+- `voice-dispatcher`
+- `autoheal`
+
+Start NWWS ingest too:
 
 ```bash
 docker compose --profile nwws up --build
@@ -103,156 +148,226 @@ docker compose --profile nwws up --build
 Useful commands:
 
 ```bash
-# Create an API operator user inside the api image.
 docker compose run --rm api create-user \
   --account-id 1 \
   --email admin@example.com \
   --password 'change-me' \
   --display-name 'ThunderCall Admin'
 
-# Build a single service image.
 docker build --target api -t thundercall-api .
 docker build --target ingest -t thundercall-ingest .
 docker build --target worker -t thundercall-worker .
+docker build --target voice-dispatcher -t thundercall-voice-dispatcher .
 ```
 
-Notes:
+Local Docker defaults:
 
-- `api` is exposed on `http://localhost:8080`
-- `mysql` is exposed on `localhost:3306`
-- `redis` is exposed on `localhost:6379`
-- `worker` can start without Twilio/SendGrid credentials, but delivery attempts
-  will fail until those providers are configured, except voice calls when
-  `THUNDERCALL_TWILIO_VOICE_LOG_ONLY=true` (the current default), which are
-  logged and marked sent without calling Twilio
-- `ingest` will exit immediately unless the NWWS credentials in `.env.docker`
-  are populated
-- `api`, `ingest`, `worker`, `mysql`, and `redis` all publish Docker health
-  checks, and the compose stack includes an `autoheal` sidecar that restarts
-  any container marked `unhealthy`
+- API: `http://localhost:8080`
+- MySQL: `127.0.0.1:3306`
+- Redis: `127.0.0.1:6379`
+- ingest is behind the `nwws` compose profile
+- worker and voice-dispatcher can run without live Twilio credentials if
+  voice dry-run mode is enabled
 
-Create an operator login:
+## Runtime Environment Variables
 
-```bash
-go run ./cmd/api create-user \
-  --account-id 1 \
-  --email admin@example.com \
-  --password 'change-me' \
-  --display-name 'ThunderCall Admin'
-```
+These are the env vars loaded by `internal/config`.
 
-Environment variables:
+### MySQL
 
-- `THUNDERCALL_MYSQL_DSN` enables the MySQL-backed runtime
-- `THUNDERCALL_API_LISTEN_ADDR`, `THUNDERCALL_API_SESSION_TTL`
-- `THUNDERCALL_HEARTBEAT_PATH`, `THUNDERCALL_HEARTBEAT_MAX_AGE` for the
-  heartbeat-backed Docker health checks used by `worker` and `ingest`
-- `THUNDERCALL_REDIS_ADDR`, `THUNDERCALL_REDIS_STREAM`,
-  `THUNDERCALL_REDIS_GROUP`, `THUNDERCALL_REDIS_CONSUMER`
-- `THUNDERCALL_TWILIO_VOICE_LOG_ONLY` keeps worker voice delivery in log-only
-  mode for validation runs without placing real calls
-- `THUNDERCALL_TWILIO_VOICE_TO_OVERRIDE` forces all voice calls to a single
-  test number while still resolving the real intended recipients
-- `THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL` collapses override mode to
-  one real Twilio call per incoming message while still recording every
-  intended recipient as sent in the local test pipeline
-- `TWILIO_VOICE_URL` points voice delivery at the hosted Twilio Function. The
-  worker sends `audio=<warning family>` and `id=<account.id>`. In local
-  override mode, the worker intentionally falls back to inline test TwiML so
-  test calls can still announce the intended recipient.
-- `THUNDERCALL_NWWS_USERNAME`, `THUNDERCALL_NWWS_PASSWORD`,
-  `THUNDERCALL_NWWS_DOMAIN`, `THUNDERCALL_NWWS_ROOM_SERVER`,
-  `THUNDERCALL_NWWS_ROOM`, `THUNDERCALL_NWWS_PRODUCTS`
-- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
-- `TWILIO_SMS_FROM` or `TWILIO_MESSAGING_SERVICE_SID`
-- `TWILIO_VOICE_FROM`, `TWILIO_VOICE_URL`
-- `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `SENDGRID_FROM_NAME`
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_MYSQL_DSN` | none | Required for all four runtime services. |
 
-## Daily MySQL Backups
+### Redis
 
-The repo includes a host-run backup script at
-[ops/mysql-backup.sh](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/ops/mysql-backup.sh).
-It uses `docker compose exec -T mysql mysqldump ...`, compresses the dump with
-`gzip`, and prunes old backups by retention.
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_REDIS_ADDR` | none | Required for `ingest` and `worker`. |
+| `THUNDERCALL_REDIS_PASSWORD` | empty | Optional Redis auth. |
+| `THUNDERCALL_REDIS_DB` | `0` | Redis DB index. |
+| `THUNDERCALL_REDIS_STREAM` | `thundercall:messages` | Message stream key. |
+| `THUNDERCALL_REDIS_GROUP` | `thundercall-workers` | Consumer group name. |
+| `THUNDERCALL_REDIS_CONSUMER` | `os.Hostname()` or `worker` | Default consumer name. |
+| `THUNDERCALL_REDIS_BLOCK` | `5s` | Blocking read duration for worker stream reads. |
+| `THUNDERCALL_REDIS_CLAIM_IDLE` | `30s` | Minimum idle before pending messages may be auto-claimed. |
+| `THUNDERCALL_REDIS_BATCH_SIZE` | `25` | General Redis batch size default. |
 
-Default behavior:
+### NWWS
 
-- backup directory: `./backups/mysql`
-- retention: `14` days
-- database: `thundercall`
-- mysql service name: `mysql`
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_NWWS_DOMAIN` | `nwws-oi.weather.gov` | XMPP domain. |
+| `THUNDERCALL_NWWS_ROOM_SERVER` | `conference.nwws-oi.weather.gov` | XMPP MUC server. |
+| `THUNDERCALL_NWWS_ROOM` | `nwws` | Room name. |
+| `THUNDERCALL_NWWS_USERNAME` | none | Required for ingest runtime. |
+| `THUNDERCALL_NWWS_PASSWORD` | none | Required for ingest runtime. |
+| `THUNDERCALL_NWWS_JOIN_PASSWORD` | same as `THUNDERCALL_NWWS_PASSWORD` | Optional separate room password. |
+| `THUNDERCALL_NWWS_NICK` | same as `THUNDERCALL_NWWS_USERNAME` | Optional MUC nick override. |
+| `THUNDERCALL_NWWS_PRODUCTS` | `SVR,FFW,TOR,WSW,TSU` | Allowed products persisted by ingest. |
+| `THUNDERCALL_NWWS_LOG_FULL_MESSAGES` | `false` | Log complete NWWS bulletin text. |
+| `THUNDERCALL_NWWS_IDLE_TIMEOUT` | `5m` | Consumer idle timeout watchdog. |
 
-Run it manually:
+### Ingest
 
-```bash
-./ops/mysql-backup.sh
-```
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_INGEST_PUBLISH_INTERVAL` | `2s` | How often the outbox relay wakes up. |
+| `THUNDERCALL_INGEST_PUBLISH_BATCH_SIZE` | `50` | Max unpublished outbox rows pushed per batch. |
 
-Useful overrides:
+### Worker
 
-```bash
-THUNDERCALL_BACKUP_DIR=/opt/thundercall/backups/mysql \
-THUNDERCALL_BACKUP_RETENTION_DAYS=30 \
-THUNDERCALL_BACKUP_MYSQL_PASSWORD='change-me' \
-./ops/mysql-backup.sh
-```
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_WORKER_READ_COUNT` | `25` | Max messages read from Redis per worker pass. |
 
-A sample cron entry lives at
-[ops/cron/thundercall-mysql-backup.cron.example](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/ops/cron/thundercall-mysql-backup.cron.example).
-Update the script path, backup directory, and MySQL password for your host
-before installing it with `crontab`.
+### Voice Dispatcher
 
-## MySQL Integration Tests
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_VOICE_CONSUMER` | `os.Hostname()` or `voice-dispatcher` | Consumer identity stored on claimed attempts. |
+| `THUNDERCALL_VOICE_CLAIM_BATCH_SIZE` | `25` | Max queued voice attempts claimed per pass. |
+| `THUNDERCALL_VOICE_CPS` | `1` | Pacing rate used by the voice dispatcher. |
+| `THUNDERCALL_VOICE_CLAIM_LEASE` | `2m` | Lease expiration on claimed voice attempts. |
+| `THUNDERCALL_VOICE_RETRY_DELAY` | `30s` | Requeue delay for retryable Twilio failures. |
+| `THUNDERCALL_VOICE_IDLE_SLEEP` | `2s` | Sleep interval when no voice work is available. |
 
-The repo includes opt-in MySQL integration tests for the real spatial and
-delivery-dedupe path, including:
+### API
 
-- `locations.MatchForMessage(...)` against MySQL `ST_Intersects(...)`
-- recipient resolution from real `locations` + `users_locations` rows
-- same-event update behavior where a later polygon only calls newly affected
-  users
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_API_LISTEN_ADDR` | `:8080` | API listen address. |
+| `THUNDERCALL_API_SESSION_TTL` | `24h` | Bearer-session TTL. |
 
-These tests require a disposable MySQL database DSN with permission to create
-and drop test databases. The safest pattern is to point at the local Docker
-MySQL root account:
+### Health Checks
 
-```bash
-THUNDERCALL_TEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/thundercall_test?charset=utf8mb4&parseTime=true&loc=UTC' \
-  go test -tags=integration ./internal/repositories/locations ./internal/thundercall
-```
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_HEARTBEAT_PATH` | empty | Required if you want heartbeat-based health checks. |
+| `THUNDERCALL_HEARTBEAT_MAX_AGE` | `1m` | Max allowed heartbeat age. |
 
-The harness creates a unique database per test run and drops it on cleanup. As
-a guardrail, the DSN database name must include `test`.
+### Geocoding
 
-## Comparing Go Vs Legacy NWWS
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_CENSUS_BASE_URL` | `https://geocoding.geo.census.gov/geocoder` | U.S. Census geocoder base URL. |
+| `THUNDERCALL_CENSUS_BENCHMARK` | `Public_AR_Current` | Census benchmark. |
+| `THUNDERCALL_CENSUS_VINTAGE` | `Current_Current` | Census vintage. |
+| `THUNDERCALL_WEATHERGOV_BASE_URL` | `https://api.weather.gov` | Used for zone lookup. |
+| `THUNDERCALL_GEOCODER_USER_AGENT` | `thundercall/0.1` | Sent to upstream geocoding services. |
+| `THUNDERCALL_GEOCODER_TIMEOUT` | `10s` | Outbound geocoder timeout. |
 
-Use the comparison tool to diff recent NWWS messages in Go `messages` against
-legacy `PendingMessages` over the same time window:
+### Twilio
 
-```bash
-go run ./cmd/compare-nwws -window 30m
-```
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TWILIO_ACCOUNT_SID` | empty | Required for live Twilio API calls. |
+| `TWILIO_AUTH_TOKEN` | empty | Required for live Twilio API calls. |
+| `TWILIO_MESSAGING_SERVICE_SID` | empty | Reserved for future SMS support. |
+| `TWILIO_SMS_FROM` | empty | Reserved for future SMS support. |
+| `TWILIO_VOICE_FROM` | empty | Required for live voice calls. |
+| `TWILIO_VOICE_URL` | empty | Optional hosted Twilio Function base URL. |
+| `TWILIO_VOICE_STATUS_CALLBACK` | empty | Optional Twilio status callback URL. |
+| `THUNDERCALL_TWILIO_VOICE_TO_OVERRIDE` | empty | Force all test calls to one destination. |
+| `THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL` | `true` | Collapse override mode to one real call per message/event channel window. |
+| `THUNDERCALL_TWILIO_VOICE_LOG_ONLY` | `true` | Dry-run voice mode. No real Twilio call is placed. |
 
-Useful flags:
+Twilio voice behavior:
 
-- `-since 2026-08-11T18:00:00Z`
-- `-until 2026-08-11T18:30:00Z`
-- `-limit 1000`
-- `-strict` to exit non-zero when differences are found
+- if `TWILIO_VOICE_URL` is set and override mode is off, the dispatcher calls
+  the hosted Twilio Function with `audio=<warning family>` and
+  `id=<account_id>`
+- if override mode is on, the dispatcher intentionally falls back to inline
+  TwiML so the test call can announce the intended recipient
+- if log-only mode is on, attempts are marked sent with deterministic dry-run
+  provider IDs and no real call is placed
 
-Defaults:
+### SendGrid
 
-- Go reads `THUNDERCALL_MYSQL_DSN`, falling back to
-  `thundercall:thundercall@tcp(127.0.0.1:3306)/thundercall?...`
-- legacy reads `THUNDERCALL_LEGACY_PG_DSN`
-- if no legacy DSN is set, the tool falls back to the C# repo defaults:
-  `postgres://postgres:postgres@10.0.1.199:5432/thundercall?sslmode=prefer`
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SENDGRID_API_KEY` | empty | Reserved for future email execution. |
+| `SENDGRID_FROM_EMAIL` | empty | Reserved for future email execution. |
+| `SENDGRID_FROM_NAME` | empty | Reserved for future email execution. |
 
-## Schema Notes
+## Test-Only Environment Variables
 
-The schema in [db/schema.sql](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/db/schema.sql)
-is the single source of truth for local database setup at this stage and tracks
-the simplified model:
+### Disposable MySQL Harness
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_TEST_MYSQL_DSN` | none | Required for MySQL-backed tests. DB name must include `test`. The harness creates and drops a unique database per run. |
+
+### Redis-Backed Pipeline Tests
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_TEST_REDIS_ADDR` | `127.0.0.1:6379` fallback if `THUNDERCALL_REDIS_ADDR` is unset | Used by Redis-backed integration tests. |
+| `THUNDERCALL_TEST_REDIS_PASSWORD` | fallback to `THUNDERCALL_REDIS_PASSWORD`, otherwise empty | Optional auth for Redis-backed tests. |
+
+### Live Twilio Integration Test
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_RUN_LIVE_TWILIO_TEST` | disabled | Must be `1` or `true` to place a real call. |
+| `THUNDERCALL_LIVE_TWILIO_TEST_TO` | none | Destination for the real test call. |
+
+## Backup Script Environment Variables
+
+These are used by `ops/mysql-backup.sh`.
+
+| Variable | Default |
+| --- | --- |
+| `THUNDERCALL_BACKUP_COMPOSE_FILE` | `<repo>/compose.yaml` |
+| `THUNDERCALL_BACKUP_MYSQL_SERVICE` | `mysql` |
+| `THUNDERCALL_BACKUP_MYSQL_DATABASE` | `thundercall` |
+| `THUNDERCALL_BACKUP_MYSQL_USER` | `thundercall` |
+| `THUNDERCALL_BACKUP_MYSQL_PASSWORD` | `thundercall` |
+| `THUNDERCALL_BACKUP_DIR` | `<repo>/backups/mysql` |
+| `THUNDERCALL_BACKUP_RETENTION_DAYS` | `14` |
+| `THUNDERCALL_BACKUP_FILE_PREFIX` | `thundercall` |
+
+## HTTP API Surface
+
+See `API.md` for request/response bodies. Current routes:
+
+### Health
+
+- `GET /healthz`
+
+### Public Signup Aliases
+
+These all map to the same public signup flow:
+
+- `POST /api/users/signup`
+- `POST /api/products/{productId}/records`
+- `POST /v1/public/signups`
+
+### Authenticated Operator API
+
+- `POST /v1/auth/login`
+- `POST /v1/auth/logout`
+- `GET /v1/auth/me`
+- `GET /v1/dashboard/summary`
+- `GET /v1/messages`
+- `POST /v1/messages/lookup`
+- `GET /v1/messages/{id}`
+- `GET /v1/messages/{id}/locations`
+- `GET /v1/messages/{id}/deliveries`
+- `GET /v1/locations`
+- `GET /v1/locations/{id}`
+- `POST /v1/users`
+
+Useful notes:
+
+- `POST /v1/messages/lookup` finds warnings by address or lat/lon
+- `POST /v1/users` creates a user plus geocoded location data under an account
+- `POST /api/products/{productId}/records` is kept as a legacy-friendly alias
+  for older signup forms
+
+## Schema Summary
+
+Current primary tables:
 
 - `accounts`
 - `users`
@@ -271,64 +386,98 @@ the simplified model:
 - `delivery_attempts`
 - `outbox_events`
 
-## API Endpoints
+## Integration Tests
 
-Authenticated requests use `Authorization: Bearer <token>`.
+### Tagged Integration Tests
 
-- `POST /v1/auth/login`
-- `POST /v1/auth/logout`
-- `GET /v1/auth/me`
-- `GET /v1/dashboard/summary`
-- `GET /v1/messages`
-- `GET /v1/messages/{id}`
-- `GET /v1/messages/{id}/locations`
-- `GET /v1/messages/{id}/deliveries`
-- `GET /v1/locations`
-- `GET /v1/locations/{id}`
+Run with `go test -tags integration ...`.
 
-### Query Parameters
+- `internal/repositories/locations/repository_integration_test.go`
+  - `TestRepositoryMatchForMessagePolygonAndFallback`
+  - verifies real MySQL spatial matching and FIPS/zone fallback matching
+- `internal/thundercall/channel_dispatcher_integration_test.go`
+  - `TestMySQLIntegrationInitialAndUpdatedPolygonCallOnlyNetNewUsers`
+  - verifies initial-vs-updated event behavior and net-new user suppression
+- `internal/voicedispatcher/service_integration_test.go`
+  - `TestMySQLIntegrationClaimQueuedVoiceAttemptsFairAcrossMessages`
+  - verifies fair SQL claiming across multiple queued messages
+- `internal/voicedispatcher/service_integration_test.go`
+  - `TestMySQLIntegrationWorkerAndVoiceDispatcherOnlyCallNetNewUsersOnUpdatedEvent`
+  - verifies worker planning plus voice-dispatch send/suppress behavior using a fake sender
+- `internal/voicedispatcher/pipeline_integration_test.go`
+  - `TestIntegrationIngestOutboxWorkerVoiceDispatcherPipeline`
+  - full ingest -> outbox -> Redis -> worker -> voice-dispatcher -> DB assertion flow using a real NWWS sample
+- `internal/voicedispatcher/pipeline_integration_test.go`
+  - `TestIntegrationVoiceDispatcherRespectsCPSAndFairnessAcrossMessages`
+  - verifies paced dispatch and cross-message fairness under concurrent queued work
+- `internal/voicedispatcher/live_twilio_integration_test.go`
+  - `TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient`
+  - places one real Twilio call, then verifies the later update is suppressed for the same recipient
 
-`GET /v1/messages`
+### DB-Backed Integration-Style Test
 
-- `from`, `to`: RFC3339 or `YYYY-MM-DD`
-- `search`: free-text search across message metadata
-- `eventCode`: NWWS/VTEC-style event code filter such as `SVR` or `TOR`
-- `messageType`: normalized message type
-- `status`: processing status
-- `source`: source feed, currently `nwws`
-- `limit`, `offset`: pagination
+This test is not build-tagged, but it still uses the disposable MySQL harness:
 
-`GET /v1/dashboard/summary`
+- `internal/httpapi/public_signup_integration_test.go`
+  - `TestHandlePublicSignupCreatesUserLocationContactsAndSettings`
+  - verifies the public signup flow creates the user, location, contact
+    methods, subscription, and warning settings correctly
 
-- Uses the same filter set as `GET /v1/messages`
+### Useful Test Commands
 
-`GET /v1/locations`
+Standard unit tests:
 
-- `search`: free-text location name/address search
-- `activeOnly`: `true` or `false`
-- `limit`, `offset`: pagination
+```bash
+GOCACHE=/tmp/go-build go test ./...
+```
 
-`GET /v1/messages/{id}/deliveries`
+MySQL + Redis integration suite:
 
-- `search`: recipient name/title search
-- `status`: recipient delivery status
-- `limit`, `offset`: pagination
+```bash
+THUNDERCALL_TEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/thundercall_test?charset=utf8mb4&parseTime=true&loc=UTC' \
+THUNDERCALL_TEST_REDIS_ADDR=127.0.0.1:6379 \
+GOCACHE=/tmp/go-build \
+go test -tags integration ./internal/...
+```
 
-The initial API is intentionally operator-focused and read-heavy. It is meant
-to support the first replacement UI for:
+Live Twilio integration test:
 
-- historical message browsing
-- per-message SMS/email/voice counts
-- entries, attempts, and sent/failure rollups
-- impacted-location drill-downs
-- recipient/result inspection for a selected alert
+```bash
+THUNDERCALL_RUN_LIVE_TWILIO_TEST=1 \
+THUNDERCALL_LIVE_TWILIO_TEST_TO=+14075551212 \
+THUNDERCALL_TEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/thundercall_test?charset=utf8mb4&parseTime=true&loc=UTC' \
+TWILIO_ACCOUNT_SID=... \
+TWILIO_AUTH_TOKEN=... \
+TWILIO_VOICE_FROM=... \
+GOCACHE=/tmp/go-build \
+go test -tags integration ./internal/voicedispatcher -run TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient -count=1 -v
+```
 
-## Recommended Next Steps
+## MySQL Backups
 
-1. Add external migration tooling from the legacy ThunderCall/1Hub schema into
-   this simplified schema.
-2. Add delivery status callback/webhook handling for Twilio and SendGrid.
-3. Add write endpoints for operator workflows such as managing locations,
-   operator users, and notification settings.
-4. Add integration tests around MySQL + Redis-backed ingest/worker/API flows.
-5. Expand beyond NWWS only after the new pipeline is stable.
+Run the host-side backup script:
+
+```bash
+./ops/mysql-backup.sh
+```
+
+Example overrides:
+
+```bash
+THUNDERCALL_BACKUP_DIR=/opt/thundercall/backups/mysql \
+THUNDERCALL_BACKUP_RETENTION_DAYS=30 \
+THUNDERCALL_BACKUP_MYSQL_PASSWORD='change-me' \
+./ops/mysql-backup.sh
+```
+
+Sample cron entry:
+
+- `ops/cron/thundercall-mysql-backup.cron.example`
+
+## Near-Term Next Steps
+
+- add Twilio voice status callback ingestion so call outcomes move beyond
+  queued/sent/failed
+- add operator write flows beyond basic user/location creation
+- add SMS/email execution only when product scope calls for it
+- continue validating Go-vs-legacy recipient parity during cutover

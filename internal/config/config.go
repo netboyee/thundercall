@@ -13,6 +13,7 @@ type Config struct {
 	NWWS      NWWSConfig
 	Ingest    IngestConfig
 	Worker    WorkerConfig
+	Voice     VoiceDispatcherConfig
 	API       APIConfig
 	Health    HealthConfig
 	Geocoding GeocodingConfig
@@ -79,6 +80,15 @@ type IngestConfig struct {
 
 type WorkerConfig struct {
 	ReadCount int64
+}
+
+type VoiceDispatcherConfig struct {
+	ConsumerName   string
+	ClaimBatchSize int
+	CallsPerSecond int
+	ClaimLease     time.Duration
+	RetryDelay     time.Duration
+	IdleSleep      time.Duration
 }
 
 type APIConfig struct {
@@ -151,7 +161,7 @@ func Load() (Config, error) {
 			Password:        os.Getenv("THUNDERCALL_NWWS_PASSWORD"),
 			JoinPassword:    os.Getenv("THUNDERCALL_NWWS_JOIN_PASSWORD"),
 			Nickname:        os.Getenv("THUNDERCALL_NWWS_NICK"),
-			Products:        csvValueOrDefault("THUNDERCALL_NWWS_PRODUCTS", []string{"SVR", "FFW", "TOR", "WSW", "TSU", "NPW"}),
+			Products:        csvValueOrDefault("THUNDERCALL_NWWS_PRODUCTS", []string{"SVR", "FFW", "TOR", "WSW", "TSU"}),
 			LogFullMessages: boolValueOrDefault("THUNDERCALL_NWWS_LOG_FULL_MESSAGES", false),
 			IdleTimeout:     durationValueOrDefault("THUNDERCALL_NWWS_IDLE_TIMEOUT", 5*time.Minute),
 		},
@@ -161,6 +171,14 @@ func Load() (Config, error) {
 		},
 		Worker: WorkerConfig{
 			ReadCount: int64ValueOrDefault("THUNDERCALL_WORKER_READ_COUNT", 25),
+		},
+		Voice: VoiceDispatcherConfig{
+			ConsumerName:   valueOrDefault("THUNDERCALL_VOICE_CONSUMER", hostnameOr("voice-dispatcher")),
+			ClaimBatchSize: intValueOrDefault("THUNDERCALL_VOICE_CLAIM_BATCH_SIZE", 25),
+			CallsPerSecond: intValueOrDefault("THUNDERCALL_VOICE_CPS", 1),
+			ClaimLease:     durationValueOrDefault("THUNDERCALL_VOICE_CLAIM_LEASE", 2*time.Minute),
+			RetryDelay:     durationValueOrDefault("THUNDERCALL_VOICE_RETRY_DELAY", 30*time.Second),
+			IdleSleep:      durationValueOrDefault("THUNDERCALL_VOICE_IDLE_SLEEP", 2*time.Second),
 		},
 		API: APIConfig{
 			ListenAddr: valueOrDefault("THUNDERCALL_API_LISTEN_ADDR", ":8080"),

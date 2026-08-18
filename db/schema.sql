@@ -320,6 +320,10 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   status VARCHAR(32) NOT NULL DEFAULT 'queued',
   error_message TEXT NULL,
   requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  dispatch_after TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  lease_token VARCHAR(64) NULL,
+  lease_owner VARCHAR(128) NULL,
+  lease_expires_at TIMESTAMP NULL DEFAULT NULL,
   sent_at TIMESTAMP NULL DEFAULT NULL,
   delivered_at TIMESTAMP NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -330,6 +334,8 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   KEY idx_delivery_attempts_users_message_id (users_message_id),
   KEY idx_delivery_attempts_notification_id (notification_id),
   KEY idx_delivery_attempts_channel_status (channel, status),
+  KEY idx_delivery_attempts_voice_queue (channel, status, dispatch_after, lease_expires_at),
+  KEY idx_delivery_attempts_lease_token (lease_token),
   CONSTRAINT fk_delivery_attempts_users_message_id
     FOREIGN KEY (users_message_id) REFERENCES users_messages (id)
     ON DELETE CASCADE,

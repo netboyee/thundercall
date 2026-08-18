@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	twilioclient "github.com/twilio/twilio-go/client"
+
 	"thundercall-go/internal/config"
 )
 
@@ -188,5 +190,19 @@ func TestSendVoiceLogOnlyLogsFunctionBackedCallWhenConfigured(t *testing.T) {
 
 	if !strings.Contains(logged, "voice_url=\"https://thundercall-2287.twil.io/welcome?audio=SVR&id=690\"") {
 		t.Fatalf("SendVoice() log = %q, want function URL with account id", logged)
+	}
+}
+
+func TestIsRetryableErrorClassifiesTwilioRateLimitsAndServerErrors(t *testing.T) {
+	t.Parallel()
+
+	if !IsRetryableError(&twilioclient.TwilioRestError{Status: 429, Code: 20429, Message: "Too many requests"}) {
+		t.Fatal("IsRetryableError(429) = false, want true")
+	}
+	if !IsRetryableError(&twilioclient.RestErrorV1{HttpStatusCode: 503, Code: 12345, Message: "Service unavailable"}) {
+		t.Fatal("IsRetryableError(503) = false, want true")
+	}
+	if IsRetryableError(&twilioclient.TwilioRestError{Status: 400, Code: 21211, Message: "Invalid To phone number"}) {
+		t.Fatal("IsRetryableError(400 invalid number) = true, want false")
 	}
 }

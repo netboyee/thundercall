@@ -1,6 +1,6 @@
 //go:build integration
 
-package worker
+package voicedispatcher
 
 import (
 	"context"
@@ -27,6 +27,7 @@ import (
 	usersmessagesrepo "thundercall-go/internal/repositories/usersmessages"
 	"thundercall-go/internal/testmysql"
 	"thundercall-go/internal/thundercall"
+	"thundercall-go/internal/worker"
 )
 
 const (
@@ -34,7 +35,7 @@ const (
 	liveTwilioTestToEnv  = "THUNDERCALL_LIVE_TWILIO_TEST_TO"
 )
 
-func TestProcessMessageLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.T) {
+func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping live Twilio integration test in short mode")
 	}
@@ -175,32 +176,44 @@ func TestProcessMessageLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipie
 	}
 
 	resolver := thundercall.NewSQLRecipientResolver(locationRepo, userLocationRepo, accountSettingsRepo, userSettingsRepo)
-	twilioProvider := twilioprovider.New(config.TwilioConfig{
-		AccountSID:   accountSID,
-		AuthToken:    authToken,
-		VoiceFrom:    voiceFrom,
-		VoiceURL:     "",
-		VoiceLogOnly: false,
-	})
-
-	dispatcher := thundercall.NewChannelDispatcher(
-		contactRepo,
-		userMessageRepo,
-		deliveryAttemptRepo,
-		notificationRepo,
-		twilioProvider,
-		nil,
-	)
-	service := NewService(messageRepo, resolver, dispatcher)
-	service.logf = t.Logf
-
-	t.Logf("placing live Twilio call to %s from %s for initial message_id=%d", liveDestination, voiceFrom, initialMessage.ID)
-	if err := service.ProcessMessage(ctx, initialMessage.ID); err != nil {
+	planner := thundercall.NewChannelDispatcher(contactRepo, userMessageRepo, deliveryAttemptRepo, notificationRepo)
+	workerService := worker.NewService(messageRepo, resolver, planner)
+	if err := workerService.ProcessMessage(ctx, initialMessage.ID); err != nil {
 		t.Fatalf("ProcessMessage(initial) error = %v", err)
 	}
-
-	if err := service.ProcessMessage(ctx, updatedMessage.ID); err != nil {
+	if err := workerService.ProcessMessage(ctx, updatedMessage.ID); err != nil {
 		t.Fatalf("ProcessMessage(updated) error = %v", err)
+	}
+
+	records, err := deliveryAttemptRepo.ClaimQueuedVoiceAttempts(ctx, "live-lease", "live-dispatcher", time.Now().UTC().Add(time.Hour), time.Minute, 10)
+	if err != nil {
+		t.Fatalf("ClaimQueuedVoiceAttempts() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("claimed records = %d, want 1 real call attempt", len(records))
+	}
+
+	dispatcher := NewService(
+		deliveryAttemptRepo,
+		userMessageRepo,
+		notificationRepo,
+		twilioprovider.New(config.TwilioConfig{
+			AccountSID:   accountSID,
+			AuthToken:    authToken,
+			VoiceFrom:    voiceFrom,
+			VoiceURL:     "",
+			VoiceLogOnly: false,
+		}),
+		&fakeWaiter{},
+		30*time.Second,
+	)
+	dispatcher.logf = t.Logf
+
+	t.Logf("placing live Twilio call to %s from %s for initial message_id=%d", liveDestination, voiceFrom, initialMessage.ID)
+	for _, record := range records {
+		if err := dispatcher.ProcessAttempt(ctx, record); err != nil {
+			t.Fatalf("ProcessAttempt(%d) error = %v", record.Attempt.ID, err)
+		}
 	}
 
 	assertMessageProcessed(t, ctx, messageRepo, initialMessage.ID)
@@ -250,8 +263,8 @@ func TestProcessMessageLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipie
 	}
 
 	t.Logf("live Twilio call placed successfully with provider_message_id=%s", *attempt.ProviderMessageID)
-	assertCount(t, harness.DB, "SELECT COUNT(*) FROM notifications", 1)
-	assertCount(t, harness.DB, "SELECT COUNT(*) FROM delivery_attempts", 1)
+	assertCountLive(t, harness.DB, "SELECT COUNT(*) FROM notifications", 1)
+	assertCountLive(t, harness.DB, "SELECT COUNT(*) FROM delivery_attempts", 1)
 }
 
 func requiredEnvOrSkip(t *testing.T, key string) string {
@@ -295,7 +308,7 @@ func assertMessageProcessed(t *testing.T, ctx context.Context, repo *messagesrep
 	}
 }
 
-func assertCount(t *testing.T, db *sql.DB, query string, want int64) {
+func assertCountLive(t *testing.T, db *sql.DB, query string, want int64) {
 	t.Helper()
 
 	var got int64
@@ -305,12 +318,4 @@ func assertCount(t *testing.T, db *sql.DB, query string, want int64) {
 	if got != want {
 		t.Fatalf("count query %q = %d, want %d", query, got, want)
 	}
-}
-
-func stringPtr(value string) *string {
-	return &value
-}
-
-func timePtr(value time.Time) *time.Time {
-	return &value
 }

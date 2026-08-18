@@ -119,6 +119,35 @@ services:
       retries: 3
       start_period: 30s
 
+  voice-dispatcher:
+    build:
+      context: .
+      target: voice-dispatcher
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+    env_file:
+      - .env.docker
+    environment:
+      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
+      THUNDERCALL_HEARTBEAT_PATH: /dev/shm/thundercall/voice-dispatcher.heartbeat
+      THUNDERCALL_HEARTBEAT_MAX_AGE: 45s
+      THUNDERCALL_VOICE_CONSUMER: voice-dispatcher-1
+      THUNDERCALL_VOICE_CLAIM_BATCH_SIZE: 25
+      THUNDERCALL_VOICE_CPS: 1
+      THUNDERCALL_VOICE_CLAIM_LEASE: 2m
+      THUNDERCALL_VOICE_RETRY_DELAY: 30s
+      THUNDERCALL_VOICE_IDLE_SLEEP: 2s
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/thundercall", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   autoheal:
     image: willfarrell/autoheal:latest
     restart: unless-stopped
