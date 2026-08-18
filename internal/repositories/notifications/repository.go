@@ -87,7 +87,7 @@ func (r *Repository) TouchLastMessage(ctx context.Context, id int64, lastMessage
 	_, err := r.db.ExecContext(
 		ctx,
 		`UPDATE notifications
-		 SET last_message_id = ?,
+		 SET last_message_id = GREATEST(last_message_id, ?),
 		     updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		lastMessageID,
@@ -101,7 +101,7 @@ func (r *Repository) UpdateStatus(ctx context.Context, id int64, status string, 
 		ctx,
 		`UPDATE notifications
 		 SET status = ?,
-		     last_message_id = ?,
+		     last_message_id = GREATEST(last_message_id, ?),
 		     first_attempted_at = COALESCE(first_attempted_at, ?),
 		     sent_at = COALESCE(sent_at, ?),
 		     delivered_at = COALESCE(delivered_at, ?),

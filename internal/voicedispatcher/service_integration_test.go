@@ -235,6 +235,10 @@ func TestMySQLIntegrationWorkerAndVoiceDispatcherOnlyCallNetNewUsersOnUpdatedEve
 	assertVoiceUserMessageStatus(t, ctx, userMessageRepo, initialMessage.ID, user2.ID, "sent")
 	assertVoiceUserMessageStatus(t, ctx, userMessageRepo, updatedMessage.ID, user2.ID, "suppressed")
 	assertVoiceUserMessageStatus(t, ctx, userMessageRepo, updatedMessage.ID, user3.ID, "sent")
+
+	assertVoiceNotificationWindow(t, ctx, notificationRepo, event.ID, user1.ID, initialMessage.ID, initialMessage.ID)
+	assertVoiceNotificationWindow(t, ctx, notificationRepo, event.ID, user2.ID, initialMessage.ID, updatedMessage.ID)
+	assertVoiceNotificationWindow(t, ctx, notificationRepo, event.ID, user3.ID, updatedMessage.ID, updatedMessage.ID)
 }
 
 func createVoiceTestUser(t *testing.T, ctx context.Context, repo *usersrepo.Repository, accountID int64, displayName string) *models.User {
@@ -317,6 +321,28 @@ func assertVoiceCallCount(t *testing.T, calls []twilioprovider.VoiceRequest, des
 	}
 	if got != want {
 		t.Fatalf("call count for %s = %d, want %d", destination, got, want)
+	}
+}
+
+func assertVoiceNotificationWindow(t *testing.T, ctx context.Context, repo *notificationsrepo.Repository, eventID int64, userID int64, wantFirstMessageID int64, wantLastMessageID int64) {
+	t.Helper()
+
+	notification, err := repo.GetByEventUserChannel(ctx, eventID, userID, models.ChannelVoice)
+	if err != nil {
+		t.Fatalf("GetByEventUserChannel(event=%d user=%d) error = %v", eventID, userID, err)
+	}
+	if notification == nil {
+		t.Fatalf("notification missing for event=%d user=%d", eventID, userID)
+	}
+	if notification.FirstMessageID != wantFirstMessageID || notification.LastMessageID != wantLastMessageID {
+		t.Fatalf(
+			"notification message window for user=%d = %d..%d, want %d..%d",
+			userID,
+			notification.FirstMessageID,
+			notification.LastMessageID,
+			wantFirstMessageID,
+			wantLastMessageID,
+		)
 	}
 }
 
