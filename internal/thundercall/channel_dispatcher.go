@@ -307,8 +307,6 @@ func optionalProvider(provider string) *string {
 
 func providerName(channel models.Channel) string {
 	switch channel {
-	case models.ChannelEmail:
-		return "sendgrid_email"
 	case models.ChannelSMS:
 		return "twilio_sms"
 	case models.ChannelVoice:

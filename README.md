@@ -39,8 +39,8 @@ Not active yet:
 - SMS execution
 - email execution
 
-There is still some placeholder/provider code for SMS/email, but the running
-pipeline is voice-first right now.
+SMS/email remain future roadmap items, but the active delivery pipeline is
+voice-only right now.
 
 ## Project Layout
 
@@ -60,7 +60,7 @@ internal/httpapi/            HTTP handlers and query layer
 internal/ingest/             ingest pipeline and outbox relay
 internal/models/             shared data models
 internal/nwws/               parser, normalization, fixtures
-internal/providers/          Twilio and SendGrid providers
+internal/providers/          Twilio provider integration
 internal/queue/redisstreams/ Redis Streams client
 internal/repositories/       table repositories
 internal/testmysql/          disposable MySQL test harness
@@ -281,14 +281,6 @@ Twilio voice behavior:
   TwiML so the test call can announce the intended recipient
 - if log-only mode is on, attempts are marked sent with deterministic dry-run
   provider IDs and no real call is placed
-
-### SendGrid
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `SENDGRID_API_KEY` | empty | Reserved for future email execution. |
-| `SENDGRID_FROM_EMAIL` | empty | Reserved for future email execution. |
-| `SENDGRID_FROM_NAME` | empty | Reserved for future email execution. |
 
 ## Test-Only Environment Variables
 

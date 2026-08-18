@@ -18,7 +18,6 @@ type Config struct {
 	Health    HealthConfig
 	Geocoding GeocodingConfig
 	Twilio    TwilioConfig
-	SendGrid  SendGridConfig
 }
 
 type MySQLConfig struct {
@@ -127,16 +126,6 @@ func (c TwilioConfig) Enabled() bool {
 	return c.AccountSID != "" && c.AuthToken != ""
 }
 
-type SendGridConfig struct {
-	APIKey    string
-	FromEmail string
-	FromName  string
-}
-
-func (c SendGridConfig) Enabled() bool {
-	return c.APIKey != "" && c.FromEmail != ""
-}
-
 func Load() (Config, error) {
 	cfg := Config{
 		MySQL: MySQLConfig{
@@ -207,11 +196,6 @@ func Load() (Config, error) {
 			VoiceOverrideSingleCall: boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL", true),
 			VoiceStatusCallback:     os.Getenv("TWILIO_VOICE_STATUS_CALLBACK"),
 			VoiceLogOnly:            boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_LOG_ONLY", true),
-		},
-		SendGrid: SendGridConfig{
-			APIKey:    os.Getenv("SENDGRID_API_KEY"),
-			FromEmail: os.Getenv("SENDGRID_FROM_EMAIL"),
-			FromName:  os.Getenv("SENDGRID_FROM_NAME"),
 		},
 	}
 	if cfg.NWWS.JoinPassword == "" {
