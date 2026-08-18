@@ -25,7 +25,8 @@ func TestOutboxRelayPublishOnceContinuesAfterPublishFailure(t *testing.T) {
 	}
 
 	relay := NewOutboxRelay(repo, publisher, 10)
-	relay.logf = func(string, ...any) {}
+	relay.debugf = func(string, ...any) {}
+	relay.warnf = func(string, ...any) {}
 	relay.now = func() time.Time { return time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC) }
 
 	result, err := relay.PublishOnce(context.Background())
@@ -57,7 +58,8 @@ func TestOutboxRelayPublishOnceMarksFailedWhenPublishSucceedsButPersistFails(t *
 	publisher := &fakeStreamPublisher{}
 
 	relay := NewOutboxRelay(repo, publisher, 10)
-	relay.logf = func(string, ...any) {}
+	relay.debugf = func(string, ...any) {}
+	relay.warnf = func(string, ...any) {}
 
 	result, err := relay.PublishOnce(context.Background())
 	if err != nil {

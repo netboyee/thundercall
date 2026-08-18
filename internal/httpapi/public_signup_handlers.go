@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"thundercall-go/internal/geocode"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/models"
 	locationsrepo "thundercall-go/internal/repositories/locations"
 	usercontactmethodsrepo "thundercall-go/internal/repositories/usercontactmethods"
@@ -26,6 +27,8 @@ var legacyPublicSignupWarningTypeMap = map[int]string{
 	5: "special_weather_statement",
 	6: "freeze_warning",
 }
+
+var signupLogger = logging.New("api.signup")
 
 var legacyPublicSignupSupportedMessageTypes = []string{
 	"tornado_warning",
@@ -153,6 +156,16 @@ func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 		writePublicSignupError(w, http.StatusInternalServerError, "Failed to create record.")
 		return
 	}
+	signupLogger.Infof(
+		"event=user_signup account_id=%d user_id=%d location_id=%d external_id=%s county_fips=%s nws_zone=%s contact_methods=%d",
+		account.ID,
+		user.ID,
+		location.ID,
+		stringValue(user.ExternalID),
+		resolved.CountyFIPS,
+		resolved.NWSZone,
+		len(methods),
+	)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"message":        "Record created.",

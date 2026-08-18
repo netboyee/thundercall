@@ -2,10 +2,10 @@ package thundercall
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/models"
 	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
 	notificationsrepo "thundercall-go/internal/repositories/notifications"
@@ -53,13 +53,14 @@ func NewChannelDispatcher(
 	deliveryAttempts *deliveryattemptsrepo.Repository,
 	notifications *notificationsrepo.Repository,
 ) *ChannelDispatcher {
+	logger := logging.New("worker.dispatch")
 	return &ChannelDispatcher{
 		contactMethods:   contactMethods,
 		usersMessages:    usersMessages,
 		deliveryAttempts: deliveryAttempts,
 		notifications:    notifications,
 		now:              func() time.Time { return time.Now().UTC() },
-		logf:             log.Printf,
+		logf:             logger.Infof,
 	}
 }
 
@@ -237,10 +238,11 @@ func (d *ChannelDispatcher) queueChannelForMatch(ctx context.Context, message *m
 
 	if channel == models.ChannelVoice && d.logf != nil {
 		d.logf(
-			"worker queued voice attempt message_id=%d user_id=%d user_message_id=%d destination=%s",
+			"event=voice_attempt_queued message_id=%d user_id=%d user_message_id=%d attempt_id=%d destination=%s",
 			message.ID,
 			match.UserID,
 			userMessage.ID,
+			attempt.ID,
 			method.Destination,
 		)
 	}

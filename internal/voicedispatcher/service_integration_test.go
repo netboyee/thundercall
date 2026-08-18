@@ -212,7 +212,9 @@ func TestMySQLIntegrationWorkerAndVoiceDispatcherOnlyCallNetNewUsersOnUpdatedEve
 
 	sender := &fakeVoiceSender{}
 	dispatcher := NewService(attemptRepo, userMessageRepo, notificationRepo, sender, &fakeWaiter{}, 30*time.Second)
-	dispatcher.logf = func(string, ...any) {}
+	dispatcher.infof = func(string, ...any) {}
+	dispatcher.warnf = func(string, ...any) {}
+	dispatcher.debugf = func(string, ...any) {}
 
 	records, err := attemptRepo.ClaimQueuedVoiceAttempts(ctx, "lease-e2e", "dispatcher-e2e", time.Now().UTC().Add(time.Hour), time.Minute, 10)
 	if err != nil {

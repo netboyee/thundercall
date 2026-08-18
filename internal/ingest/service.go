@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"thundercall-go/internal/events"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/models"
 	"thundercall-go/internal/nwws"
 	messagesrepo "thundercall-go/internal/repositories/messages"
@@ -34,6 +35,9 @@ type Service struct {
 	streamKey       string
 	allowedProducts map[string]struct{}
 	now             func() time.Time
+	infof           func(string, ...any)
+	debugf          func(string, ...any)
+	warnf           func(string, ...any)
 }
 
 func NewService(db *sql.DB, streamKey string, allowedProducts []string) *Service {
@@ -45,12 +49,16 @@ func NewService(db *sql.DB, streamKey string, allowedProducts []string) *Service
 		}
 	}
 
+	logger := logging.New("ingest")
 	return &Service{
 		db:              db,
 		parser:          nwws.NewParser(),
 		streamKey:       streamKey,
 		allowedProducts: normalized,
 		now:             func() time.Time { return time.Now().UTC() },
+		infof:           logger.Infof,
+		debugf:          logger.Debugf,
+		warnf:           logger.Warnf,
 	}
 }
 
@@ -59,16 +67,23 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 	parsed, err := s.parser.Parse(envelope.Body, envelope.IssueTime)
 	parsedCategory := strings.ToUpper(strings.TrimSpace(parsed.AWIPSIdentifier.ProductCategory))
 	effectiveCategory := firstNonEmpty(parsedCategory, envelopeCategory)
+	externalID := s.externalID(envelope)
+	action := "UNKNOWN"
+	kind := messageKind(action)
 
 	if err != nil {
 		if effectiveCategory == "" || !s.productAllowed(effectiveCategory) {
+			s.debugf("event=nwws_ignored external_id=%s awips=%s product=%s reason=parse_error_unconfigured error=%q", externalID, envelope.AWIPSID, effectiveCategory, err)
 			return ProcessResult{IgnoredCount: 1}, nil
 		}
 	}
 
-	externalID := s.externalID(envelope)
 	if err == nil {
 		previewRequests := nwws.Normalize(parsed, 0, externalID)
+		if len(previewRequests) > 0 {
+			action = normalizeAction(previewRequests[0].VTECAction)
+			kind = messageKind(previewRequests[0].VTECAction)
+		}
 		loadableCount := 0
 		ignoredCount := 0
 		for _, req := range previewRequests {
@@ -89,6 +104,15 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 			if ignoredCount == 0 {
 				ignoredCount = 1
 			}
+			s.debugf(
+				"event=nwws_ignored external_id=%s awips=%s product=%s action=%s kind=%s reason=no_supported_segments ignored=%d",
+				externalID,
+				envelope.AWIPSID,
+				effectiveCategory,
+				action,
+				kind,
+				ignoredCount,
+			)
 			return ProcessResult{IgnoredCount: ignoredCount}, nil
 		}
 	}
@@ -104,6 +128,7 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 		return ProcessResult{}, fmt.Errorf("lookup source message %s: %w", externalID, err)
 	}
 	if existing != nil {
+		s.debugf("event=nwws_duplicate external_id=%s awips=%s source_message_id=%d product=%s action=%s kind=%s", externalID, envelope.AWIPSID, existing.ID, effectiveCategory, action, kind)
 		return ProcessResult{
 			SourceMessageID: existing.ID,
 			Duplicate:       true,
@@ -162,6 +187,16 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 		if commitErr := tx.Commit(); commitErr != nil {
 			return ProcessResult{}, fmt.Errorf("commit parse_failed source message %d: %w", sourceMessage.ID, commitErr)
 		}
+		s.warnf(
+			"event=nwws_parse_failed external_id=%s source_message_id=%d awips=%s product=%s action=%s kind=%s error=%q",
+			externalID,
+			sourceMessage.ID,
+			envelope.AWIPSID,
+			effectiveCategory,
+			action,
+			kind,
+			parseError,
+		)
 		return result, nil
 	}
 
@@ -216,6 +251,15 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 
 		if err := txMessagesRepo.Create(ctx, message); err != nil {
 			if sqlutil.IsDuplicateKey(err) {
+				s.debugf(
+					"event=nwws_message_duplicate source_message_id=%d external_id=%s product=%s event_code=%s action=%s segment=%d",
+					sourceMessage.ID,
+					externalID,
+					req.ConfiguredProductCode(),
+					req.MessageEvent,
+					normalizeAction(req.VTECAction),
+					req.SourceSegmentIndex,
+				)
 				continue
 			}
 			return ProcessResult{}, fmt.Errorf("create message for source %d segment %d: %w", sourceMessage.ID, req.SourceSegmentIndex, err)
@@ -238,6 +282,22 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 
 		result.MessageIDs = append(result.MessageIDs, message.ID)
 		result.AcceptedCount++
+		s.infof(
+			"event=nwws_message_accepted source_message_id=%d message_id=%d external_id=%s awips=%s product=%s event_code=%s action=%s kind=%s event_key=%s segment=%d polygon=%t fips=%d zones=%d",
+			sourceMessage.ID,
+			message.ID,
+			externalID,
+			envelope.AWIPSID,
+			req.ConfiguredProductCode(),
+			message.EventCode,
+			normalizeAction(req.VTECAction),
+			messageKind(req.VTECAction),
+			eventKeyValue(resolvedEvent),
+			req.SourceSegmentIndex,
+			strings.TrimSpace(req.Polygon) != "",
+			len(req.FIPSCodes),
+			len(req.NWSZones),
+		)
 	}
 
 	status := "parsed"
@@ -251,6 +311,18 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 
 	if err := tx.Commit(); err != nil {
 		return ProcessResult{}, fmt.Errorf("commit ingest for source %d: %w", sourceMessage.ID, err)
+	}
+	if result.AcceptedCount == 0 && result.IgnoredCount > 0 {
+		s.debugf(
+			"event=nwws_ignored source_message_id=%d external_id=%s awips=%s product=%s action=%s kind=%s ignored=%d",
+			sourceMessage.ID,
+			externalID,
+			envelope.AWIPSID,
+			effectiveCategory,
+			action,
+			kind,
+			result.IgnoredCount,
+		)
 	}
 	return result, nil
 }
@@ -335,4 +407,34 @@ func timePointer(value time.Time) *time.Time {
 	}
 	normalized := value.UTC()
 	return &normalized
+}
+
+func normalizeAction(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return "UNKNOWN"
+	}
+	return value
+}
+
+func messageKind(action string) string {
+	switch normalizeAction(action) {
+	case "NEW":
+		return "new"
+	case "CON", "COR", "EXT", "EXA", "EXB", "UPG", "CAN", "EXP":
+		return "update"
+	default:
+		return "unknown"
+	}
+}
+
+func eventKeyValue(event *models.NWSEvent) string {
+	if event == nil {
+		return "-"
+	}
+	value := strings.TrimSpace(event.EventKey)
+	if value == "" {
+		return "-"
+	}
+	return value
 }

@@ -16,6 +16,7 @@ import (
 	"thundercall-go/internal/database"
 	"thundercall-go/internal/geocode"
 	"thundercall-go/internal/httpapi"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/models"
 	accountsrepo "thundercall-go/internal/repositories/accounts"
 	apiusersrepo "thundercall-go/internal/repositories/apiusers"
@@ -26,6 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	logging.Configure(cfg.LogLevel)
 
 	switch command := currentCommand(); command {
 	case "create-user":
@@ -51,6 +53,7 @@ func currentCommand() string {
 }
 
 func runServer(cfg config.Config) error {
+	logger := logging.New("api")
 	if !cfg.MySQL.Enabled() {
 		return fmt.Errorf("THUNDERCALL_MYSQL_DSN is required")
 	}
@@ -63,11 +66,11 @@ func runServer(cfg config.Config) error {
 
 	server := &http.Server{
 		Addr:              cfg.API.ListenAddr,
-		Handler:           httpapi.NewServer(db, cfg.API.SessionTTL, geocode.New(cfg.Geocoding)).Handler(),
+		Handler:           httpapi.NewServerWithTwilio(db, cfg.API.SessionTTL, geocode.New(cfg.Geocoding), cfg.Twilio).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("thundercall api listening on %s", cfg.API.ListenAddr)
+	logger.Infof("event=start listen_addr=%s", cfg.API.ListenAddr)
 	return server.ListenAndServe()
 }
 
@@ -117,6 +120,7 @@ func apiHealthzURL(listenAddr string) (string, error) {
 }
 
 func runCreateUser(cfg config.Config, args []string) error {
+	logger := logging.New("api")
 	if !cfg.MySQL.Enabled() {
 		return fmt.Errorf("THUNDERCALL_MYSQL_DSN is required")
 	}
@@ -177,6 +181,6 @@ func runCreateUser(cfg config.Config, args []string) error {
 		return fmt.Errorf("insert api user: %w", err)
 	}
 
-	log.Printf("created api user %d for account %d (%s)", user.ID, user.AccountID, user.Email)
+	logger.Infof("event=api_user_created api_user_id=%d account_id=%d email=%s", user.ID, user.AccountID, user.Email)
 	return nil
 }

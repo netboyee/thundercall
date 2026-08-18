@@ -18,6 +18,7 @@ type Config struct {
 	Health    HealthConfig
 	Geocoding GeocodingConfig
 	Twilio    TwilioConfig
+	LogLevel  string
 }
 
 type MySQLConfig struct {
@@ -197,6 +198,7 @@ func Load() (Config, error) {
 			VoiceStatusCallback:     os.Getenv("TWILIO_VOICE_STATUS_CALLBACK"),
 			VoiceLogOnly:            boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_LOG_ONLY", true),
 		},
+		LogLevel: valueOrDefault("THUNDERCALL_LOG_LEVEL", "info"),
 	}
 	if cfg.NWWS.JoinPassword == "" {
 		cfg.NWWS.JoinPassword = cfg.NWWS.Password

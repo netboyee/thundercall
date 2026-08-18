@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	api "github.com/twilio/twilio-go/rest/api/v2010"
 
 	"thundercall-go/internal/config"
+	"thundercall-go/internal/logging"
 )
 
 type Provider struct {
@@ -26,7 +26,8 @@ type Provider struct {
 	voiceOverrideSingleCall bool
 	voiceStatusCallback     string
 	voiceLogOnly            bool
-	logf                    func(string, ...any)
+	debugf                  func(string, ...any)
+	warnf                   func(string, ...any)
 	now                     func() time.Time
 }
 
@@ -44,7 +45,15 @@ type VoiceRequest struct {
 	AccountID     int64
 }
 
+type VoiceCallDetails struct {
+	SID             string
+	Status          string
+	AnsweredBy      string
+	DurationSeconds *int
+}
+
 func New(cfg config.TwilioConfig) *Provider {
+	logger := logging.New("twilio")
 	provider := &Provider{
 		messagingServiceSID:     cfg.MessagingServiceSID,
 		smsFrom:                 cfg.SMSFrom,
@@ -54,7 +63,8 @@ func New(cfg config.TwilioConfig) *Provider {
 		voiceOverrideSingleCall: cfg.VoiceOverrideSingleCall,
 		voiceStatusCallback:     cfg.VoiceStatusCallback,
 		voiceLogOnly:            cfg.VoiceLogOnly,
-		logf:                    log.Printf,
+		debugf:                  logger.Debugf,
+		warnf:                   logger.Warnf,
 		now:                     func() time.Time { return time.Now().UTC() },
 	}
 	if !cfg.Enabled() {
@@ -102,8 +112,8 @@ func (p *Provider) SendVoice(_ context.Context, request VoiceRequest) (Result, e
 	if p.voiceLogOnly {
 		providerMessageID := fmt.Sprintf("dryrun-voice-%d", p.now().UnixNano())
 		if voiceURL, ok := p.voiceFunctionURL(request); ok {
-			p.logf(
-				"twilio voice dry-run: placing function-backed call to=%s from=%s provider_message_id=%s voice_url=%q audio=%s account_id=%d",
+			p.debugf(
+				"event=twilio_voice_dry_run mode=function to=%s from=%s provider_message_id=%s voice_url=%q audio=%s account_id=%d",
 				to,
 				p.voiceFrom,
 				providerMessageID,
@@ -112,12 +122,11 @@ func (p *Provider) SendVoice(_ context.Context, request VoiceRequest) (Result, e
 				request.AccountID,
 			)
 		} else {
-			p.logf(
-				"twilio voice dry-run: placing call to=%s from=%s provider_message_id=%s body=%q",
+			p.debugf(
+				"event=twilio_voice_dry_run mode=twiml to=%s from=%s provider_message_id=%s",
 				to,
 				p.voiceFrom,
 				providerMessageID,
-				truncateLogBody(request.Body, 120),
 			)
 		}
 		return Result{
@@ -136,14 +145,16 @@ func (p *Provider) SendVoice(_ context.Context, request VoiceRequest) (Result, e
 	params := &api.CreateCallParams{}
 	params.SetTo(to)
 	params.SetFrom(p.voiceFrom)
+	params.SetMachineDetection("DetectMessageEnd")
 	if voiceURL, ok := p.voiceFunctionURL(request); ok {
 		params.SetUrl(voiceURL)
-		params.SetMachineDetection("DetectMessageEnd")
 	} else {
 		params.SetTwiml(buildVoiceTwiml(request.Body))
 	}
 	if p.voiceStatusCallback != "" {
 		params.SetStatusCallback(p.voiceStatusCallback)
+		params.SetStatusCallbackMethod("POST")
+		params.SetStatusCallbackEvent([]string{"completed"})
 	}
 
 	resp, err := p.client.Api.CreateCall(params)
@@ -156,6 +167,30 @@ func (p *Provider) SendVoice(_ context.Context, request VoiceRequest) (Result, e
 		ProviderMessageID: deref(resp.Sid),
 		Status:            deref(resp.Status),
 	}, nil
+}
+
+func (p *Provider) LookupVoiceCall(_ context.Context, sid string) (VoiceCallDetails, error) {
+	if p.client == nil {
+		return VoiceCallDetails{}, fmt.Errorf("twilio is not configured")
+	}
+
+	call, err := p.client.Api.FetchCall(strings.TrimSpace(sid), nil)
+	if err != nil {
+		return VoiceCallDetails{}, err
+	}
+
+	details := VoiceCallDetails{
+		SID:        deref(call.Sid),
+		Status:     deref(call.Status),
+		AnsweredBy: deref(call.AnsweredBy),
+	}
+	if duration := strings.TrimSpace(deref(call.Duration)); duration != "" {
+		if value, parseErr := strconv.Atoi(duration); parseErr == nil {
+			details.DurationSeconds = &value
+		}
+	}
+
+	return details, nil
 }
 
 func (p *Provider) ResolveVoiceDestination(to string) (string, bool) {
@@ -197,6 +232,10 @@ func (p *Provider) CollapseVoiceOverrideCalls() bool {
 	return strings.TrimSpace(p.voiceToOverride) != "" && p.voiceOverrideSingleCall
 }
 
+func (p *Provider) VoiceFrom() string {
+	return strings.TrimSpace(p.voiceFrom)
+}
+
 func (p *Provider) VoiceURL() string {
 	return p.voiceURL
 }
@@ -209,8 +248,8 @@ func (p *Provider) voiceFunctionURL(request VoiceRequest) (string, bool) {
 		return "", false
 	}
 	if request.AccountID <= 0 {
-		p.logf(
-			"twilio voice function disabled for call because account_id is missing event_code=%s alert_type=%s destination=%s",
+		p.warnf(
+			"event=twilio_voice_function_disabled reason=missing_account_id event_code=%s alert_type=%s destination=%s",
 			request.EventCode,
 			request.AlertTypeCode,
 			request.To,
@@ -220,7 +259,7 @@ func (p *Provider) voiceFunctionURL(request VoiceRequest) (string, bool) {
 
 	voiceURL, err := BuildVoiceFunctionURL(p.voiceURL, VoiceFunctionAudioCode(request.EventCode, request.AlertTypeCode), request.AccountID)
 	if err != nil {
-		p.logf("twilio voice function URL is invalid base_url=%q error=%v", p.voiceURL, err)
+		p.warnf("event=twilio_voice_function_invalid_url base_url=%q error=%q", p.voiceURL, err)
 		return "", false
 	}
 	return voiceURL, true
@@ -280,14 +319,6 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func truncateLogBody(body string, maxLength int) string {
-	body = strings.TrimSpace(body)
-	if maxLength <= 0 || len(body) <= maxLength {
-		return body
-	}
-	return body[:maxLength-3] + "..."
 }
 
 func formatPhoneNumberForVoice(value string) string {

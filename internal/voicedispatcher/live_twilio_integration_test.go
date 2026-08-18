@@ -5,12 +5,17 @@ package voicedispatcher
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"thundercall-go/internal/config"
+	"thundercall-go/internal/httpapi"
 	"thundercall-go/internal/models"
 	twilioprovider "thundercall-go/internal/providers/twilio"
 	accountsrepo "thundercall-go/internal/repositories/accounts"
@@ -31,9 +36,27 @@ import (
 )
 
 const (
-	runLiveTwilioTestEnv = "THUNDERCALL_RUN_LIVE_TWILIO_TEST"
-	liveTwilioTestToEnv  = "THUNDERCALL_LIVE_TWILIO_TEST_TO"
+	runLiveTwilioTestEnv              = "THUNDERCALL_RUN_LIVE_TWILIO_TEST"
+	liveTwilioTestToEnv               = "THUNDERCALL_LIVE_TWILIO_TEST_TO"
+	liveTwilioCallbackURLEnv          = "THUNDERCALL_LIVE_TWILIO_CALLBACK_URL"
+	liveTwilioCallbackBindAddrEnv     = "THUNDERCALL_LIVE_TWILIO_CALLBACK_BIND_ADDR"
+	liveTwilioCallbackTimeoutEnv      = "THUNDERCALL_LIVE_TWILIO_CALLBACK_TIMEOUT"
+	defaultLiveTwilioCallbackBindAddr = ":18080"
 )
+
+var liveTwilioFinalStatuses = map[string]string{
+	"completed": "sent",
+	"busy":      "failed",
+	"failed":    "failed",
+	"no-answer": "failed",
+	"canceled":  "failed",
+}
+
+type liveTwilioCallbackHarness struct {
+	publicURL string
+	timeout   time.Duration
+	errCh     <-chan error
+}
 
 func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.T) {
 	if testing.Short() {
@@ -55,6 +78,7 @@ func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.
 
 	harness := testmysql.Open(t)
 	ctx := context.Background()
+	callbackHarness := maybeStartLiveTwilioCallbackHarness(t, harness.DB, accountSID, authToken)
 
 	accountRepo := accountsrepo.New(harness.DB)
 	userRepo := usersrepo.New(harness.DB)
@@ -193,21 +217,28 @@ func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.
 		t.Fatalf("claimed records = %d, want 1 real call attempt", len(records))
 	}
 
+	twilioCfg := config.TwilioConfig{
+		AccountSID:   accountSID,
+		AuthToken:    authToken,
+		VoiceFrom:    voiceFrom,
+		VoiceURL:     "",
+		VoiceLogOnly: false,
+	}
+	if callbackHarness != nil {
+		twilioCfg.VoiceStatusCallback = callbackHarness.publicURL
+	}
+
 	dispatcher := NewService(
 		deliveryAttemptRepo,
 		userMessageRepo,
 		notificationRepo,
-		twilioprovider.New(config.TwilioConfig{
-			AccountSID:   accountSID,
-			AuthToken:    authToken,
-			VoiceFrom:    voiceFrom,
-			VoiceURL:     "",
-			VoiceLogOnly: false,
-		}),
+		twilioprovider.New(twilioCfg),
 		&fakeWaiter{},
 		30*time.Second,
 	)
-	dispatcher.logf = t.Logf
+	dispatcher.infof = t.Logf
+	dispatcher.warnf = t.Logf
+	dispatcher.debugf = t.Logf
 
 	t.Logf("placing live Twilio call to %s from %s for initial message_id=%d", liveDestination, voiceFrom, initialMessage.ID)
 	for _, record := range records {
@@ -220,7 +251,7 @@ func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.
 	assertMessageProcessed(t, ctx, messageRepo, updatedMessage.ID)
 
 	initialUserMessage := requireUserMessage(t, ctx, userMessageRepo, initialMessage.ID, user.ID)
-	if initialUserMessage.Status != "sent" {
+	if callbackHarness == nil && initialUserMessage.Status != "sent" {
 		t.Fatalf("initial user_message status = %q, want sent", initialUserMessage.Status)
 	}
 
@@ -252,7 +283,7 @@ func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.
 	}
 
 	attempt := attempts[0]
-	if attempt.Status != "sent" {
+	if callbackHarness == nil && attempt.Status != "sent" {
 		t.Fatalf("delivery attempt status = %q, want sent", attempt.Status)
 	}
 	if attempt.Destination != liveDestination {
@@ -265,6 +296,18 @@ func TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient(t *testing.
 	t.Logf("live Twilio call placed successfully with provider_message_id=%s", *attempt.ProviderMessageID)
 	assertCountLive(t, harness.DB, "SELECT COUNT(*) FROM notifications", 1)
 	assertCountLive(t, harness.DB, "SELECT COUNT(*) FROM delivery_attempts", 1)
+
+	if callbackHarness != nil {
+		t.Logf(
+			"waiting for real Twilio callback at %s for provider_message_id=%s",
+			callbackHarness.publicURL,
+			*attempt.ProviderMessageID,
+		)
+		callbackAttempt := waitForLiveTwilioCallback(t, ctx, deliveryAttemptRepo, attempt.ID, callbackHarness.timeout, callbackHarness.errCh)
+		assertLiveTwilioCallbackState(t, ctx, userMessageRepo, notificationRepo, event.ID, user.ID, initialMessage.ID, callbackAttempt)
+	} else {
+		t.Logf("live callback validation disabled; set %s to enable end-to-end webhook assertions", liveTwilioCallbackURLEnv)
+	}
 }
 
 func requiredEnvOrSkip(t *testing.T, key string) string {
@@ -318,4 +361,210 @@ func assertCountLive(t *testing.T, db *sql.DB, query string, want int64) {
 	if got != want {
 		t.Fatalf("count query %q = %d, want %d", query, got, want)
 	}
+}
+
+func maybeStartLiveTwilioCallbackHarness(t *testing.T, db *sql.DB, accountSID string, authToken string) *liveTwilioCallbackHarness {
+	t.Helper()
+
+	publicURL := strings.TrimSpace(os.Getenv(liveTwilioCallbackURLEnv))
+	if publicURL == "" {
+		return nil
+	}
+
+	bindAddr := strings.TrimSpace(os.Getenv(liveTwilioCallbackBindAddrEnv))
+	if bindAddr == "" {
+		bindAddr = defaultLiveTwilioCallbackBindAddr
+	}
+
+	timeout := 2 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv(liveTwilioCallbackTimeoutEnv)); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			t.Fatalf("parse %s: %v", liveTwilioCallbackTimeoutEnv, err)
+		}
+		timeout = parsed
+	}
+
+	server := httpapi.NewServerWithTwilio(db, time.Hour, nil, config.TwilioConfig{
+		AccountSID: accountSID,
+		AuthToken:  authToken,
+	})
+
+	listener, err := net.Listen("tcp", bindAddr)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", bindAddr, err)
+	}
+
+	httpServer := &http.Server{
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		if serveErr := httpServer.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			errCh <- serveErr
+		}
+	}()
+
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+		_ = listener.Close()
+	})
+
+	t.Logf("started local Twilio callback server on %s for public callback URL %s", bindAddr, publicURL)
+	return &liveTwilioCallbackHarness{
+		publicURL: publicURL,
+		timeout:   timeout,
+		errCh:     errCh,
+	}
+}
+
+func waitForLiveTwilioCallback(
+	t *testing.T,
+	ctx context.Context,
+	repo *deliveryattemptsrepo.Repository,
+	attemptID int64,
+	timeout time.Duration,
+	errCh <-chan error,
+) *models.DeliveryAttempt {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("live callback server error: %v", err)
+			}
+		default:
+		}
+
+		attempt, err := repo.GetByID(ctx, attemptID)
+		if err != nil {
+			t.Fatalf("GetByID(attempt=%d) error = %v", attemptID, err)
+		}
+		if attempt == nil {
+			t.Fatalf("delivery attempt %d missing while waiting for callback", attemptID)
+		}
+
+		providerStatus := strings.TrimSpace(stringValuePtr(attempt.ProviderStatus))
+		if attempt.ProviderLastCallbackAt != nil && providerStatus != "" {
+			if _, ok := liveTwilioFinalStatuses[providerStatus]; ok {
+				return attempt
+			}
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"timed out after %s waiting for live Twilio callback for attempt=%d status=%q provider_status=%q provider_last_callback_at=%v",
+				timeout,
+				attempt.ID,
+				attempt.Status,
+				providerStatus,
+				attempt.ProviderLastCallbackAt,
+			)
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func assertLiveTwilioCallbackState(
+	t *testing.T,
+	ctx context.Context,
+	userMessageRepo *usersmessagesrepo.Repository,
+	notificationRepo *notificationsrepo.Repository,
+	eventID int64,
+	userID int64,
+	messageID int64,
+	attempt *models.DeliveryAttempt,
+) {
+	t.Helper()
+
+	if attempt == nil {
+		t.Fatal("attempt is nil")
+	}
+	if attempt.ProviderLastCallbackAt == nil {
+		t.Fatal("provider_last_callback_at = nil, want callback timestamp")
+	}
+	if strings.TrimSpace(stringValuePtr(attempt.ProviderPayloadJSON)) == "" {
+		t.Fatal("provider_payload_json is empty, want persisted Twilio callback payload")
+	}
+
+	providerStatus := strings.TrimSpace(stringValuePtr(attempt.ProviderStatus))
+	expectedStatus, ok := liveTwilioFinalStatuses[providerStatus]
+	if !ok {
+		t.Fatalf("provider_status = %q, want one of %v", providerStatus, keysOfLiveTwilioStatuses())
+	}
+	if attempt.Status != expectedStatus {
+		t.Fatalf("attempt status = %q, want %q for provider_status=%q", attempt.Status, expectedStatus, providerStatus)
+	}
+	if expectedStatus == "sent" && attempt.DeliveredAt == nil {
+		t.Fatal("attempt delivered_at = nil, want timestamp for completed Twilio callback")
+	}
+	if expectedStatus == "failed" && attempt.DeliveredAt != nil {
+		t.Fatalf("attempt delivered_at = %v, want nil for provider_status=%q", *attempt.DeliveredAt, providerStatus)
+	}
+
+	userMessage := requireUserMessage(t, ctx, userMessageRepo, messageID, userID)
+	if userMessage.Status != expectedStatus {
+		t.Fatalf("user_message status = %q, want %q for provider_status=%q", userMessage.Status, expectedStatus, providerStatus)
+	}
+	if expectedStatus == "sent" && userMessage.DeliveredAt == nil {
+		t.Fatal("user_message delivered_at = nil, want timestamp for completed Twilio callback")
+	}
+	if expectedStatus == "failed" && userMessage.DeliveredAt != nil {
+		t.Fatalf("user_message delivered_at = %v, want nil for provider_status=%q", *userMessage.DeliveredAt, providerStatus)
+	}
+
+	notification, err := notificationRepo.GetByEventUserChannel(ctx, eventID, userID, models.ChannelVoice)
+	if err != nil {
+		t.Fatalf("GetByEventUserChannel() error = %v", err)
+	}
+	if notification == nil {
+		t.Fatal("notification missing after live callback")
+	}
+	if notification.Status != expectedStatus {
+		t.Fatalf("notification status = %q, want %q for provider_status=%q", notification.Status, expectedStatus, providerStatus)
+	}
+	if expectedStatus == "sent" && notification.DeliveredAt == nil {
+		t.Fatal("notification delivered_at = nil, want timestamp for completed Twilio callback")
+	}
+	if expectedStatus == "failed" && notification.DeliveredAt != nil {
+		t.Fatalf("notification delivered_at = %v, want nil for provider_status=%q", *notification.DeliveredAt, providerStatus)
+	}
+
+	t.Logf(
+		"live Twilio callback persisted provider_status=%s attempt_status=%s user_message_status=%s notification_status=%s answered_by=%s duration_seconds=%s",
+		providerStatus,
+		attempt.Status,
+		userMessage.Status,
+		notification.Status,
+		stringValuePtr(attempt.ProviderAnsweredBy),
+		intPtrStringLive(attempt.ProviderDurationSeconds),
+	)
+}
+
+func stringValuePtr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func intPtrStringLive(value *int) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.Itoa(*value)
+}
+
+func keysOfLiveTwilioStatuses() []string {
+	keys := make([]string, 0, len(liveTwilioFinalStatuses))
+	for key := range liveTwilioFinalStatuses {
+		keys = append(keys, key)
+	}
+	return keys
 }

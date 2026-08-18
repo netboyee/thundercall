@@ -24,7 +24,7 @@ func TestSendVoiceLogOnlyWithoutCredentials(t *testing.T) {
 	provider.now = func() time.Time { return now }
 
 	var logged string
-	provider.logf = func(format string, args ...any) {
+	provider.debugf = func(format string, args ...any) {
 		logged = fmt.Sprintf(format, args...)
 	}
 
@@ -174,7 +174,7 @@ func TestSendVoiceLogOnlyLogsFunctionBackedCallWhenConfigured(t *testing.T) {
 	})
 
 	var logged string
-	provider.logf = func(format string, args ...any) {
+	provider.debugf = func(format string, args ...any) {
 		logged = fmt.Sprintf(format, args...)
 	}
 

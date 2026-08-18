@@ -9,44 +9,72 @@ import (
 	"strings"
 	"time"
 
+	"thundercall-go/internal/config"
 	"thundercall-go/internal/geocode"
+	twilioprovider "thundercall-go/internal/providers/twilio"
 	accountsrepo "thundercall-go/internal/repositories/accounts"
 	apisessionsrepo "thundercall-go/internal/repositories/apisessions"
 	apiusersrepo "thundercall-go/internal/repositories/apiusers"
+	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
 	locationsrepo "thundercall-go/internal/repositories/locations"
+	notificationsrepo "thundercall-go/internal/repositories/notifications"
 	usercontactmethodsrepo "thundercall-go/internal/repositories/usercontactmethods"
 	userlocationsrepo "thundercall-go/internal/repositories/userlocations"
 	usersrepo "thundercall-go/internal/repositories/users"
+	usersmessagesrepo "thundercall-go/internal/repositories/usersmessages"
 )
 
+type twilioVoiceLookup interface {
+	LookupVoiceCall(ctx context.Context, sid string) (twilioprovider.VoiceCallDetails, error)
+}
+
 type Server struct {
-	db             *sql.DB
-	accounts       *accountsrepo.Repository
-	apiUsers       *apiusersrepo.Repository
-	apiSessions    *apisessionsrepo.Repository
-	users          *usersrepo.Repository
-	locations      *locationsrepo.Repository
-	userLocations  *userlocationsrepo.Repository
-	contactMethods *usercontactmethodsrepo.Repository
-	resolver       geocode.Resolver
-	sessionTTL     time.Duration
-	now            func() time.Time
-	pingDB         func(context.Context) error
+	db               *sql.DB
+	accounts         *accountsrepo.Repository
+	apiUsers         *apiusersrepo.Repository
+	apiSessions      *apisessionsrepo.Repository
+	users            *usersrepo.Repository
+	locations        *locationsrepo.Repository
+	userLocations    *userlocationsrepo.Repository
+	contactMethods   *usercontactmethodsrepo.Repository
+	userMessages     *usersmessagesrepo.Repository
+	notifications    *notificationsrepo.Repository
+	deliveryAttempts *deliveryattemptsrepo.Repository
+	resolver         geocode.Resolver
+	twilioVoice      twilioVoiceLookup
+	twilioAuthToken  string
+	sessionTTL       time.Duration
+	now              func() time.Time
+	pingDB           func(context.Context) error
 }
 
 func NewServer(db *sql.DB, sessionTTL time.Duration, resolver geocode.Resolver) *Server {
+	return NewServerWithTwilio(db, sessionTTL, resolver, config.TwilioConfig{})
+}
+
+func NewServerWithTwilio(db *sql.DB, sessionTTL time.Duration, resolver geocode.Resolver, twilioCfg config.TwilioConfig) *Server {
+	var twilioVoice twilioVoiceLookup
+	if twilioCfg.Enabled() {
+		twilioVoice = twilioprovider.New(twilioCfg)
+	}
+
 	server := &Server{
-		db:             db,
-		accounts:       accountsrepo.New(db),
-		apiUsers:       apiusersrepo.New(db),
-		apiSessions:    apisessionsrepo.New(db),
-		users:          usersrepo.New(db),
-		locations:      locationsrepo.New(db),
-		userLocations:  userlocationsrepo.New(db),
-		contactMethods: usercontactmethodsrepo.New(db),
-		resolver:       resolver,
-		sessionTTL:     sessionTTL,
-		now:            func() time.Time { return time.Now().UTC() },
+		db:               db,
+		accounts:         accountsrepo.New(db),
+		apiUsers:         apiusersrepo.New(db),
+		apiSessions:      apisessionsrepo.New(db),
+		users:            usersrepo.New(db),
+		locations:        locationsrepo.New(db),
+		userLocations:    userlocationsrepo.New(db),
+		contactMethods:   usercontactmethodsrepo.New(db),
+		userMessages:     usersmessagesrepo.New(db),
+		notifications:    notificationsrepo.New(db),
+		deliveryAttempts: deliveryattemptsrepo.New(db),
+		resolver:         resolver,
+		twilioVoice:      twilioVoice,
+		twilioAuthToken:  strings.TrimSpace(twilioCfg.AuthToken),
+		sessionTTL:       sessionTTL,
+		now:              func() time.Time { return time.Now().UTC() },
 	}
 	if db != nil {
 		server.pingDB = db.PingContext
@@ -61,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/users/signup", s.handlePublicSignup)
 	mux.HandleFunc("OPTIONS /api/products/{productId}/records", s.handlePublicSignupOptions)
 	mux.HandleFunc("POST /api/products/{productId}/records", s.handlePublicSignup)
+	mux.HandleFunc("POST /api/providers/twilio/voice/status", s.handleTwilioVoiceStatusCallback)
 	mux.HandleFunc("POST /v1/auth/login", s.handleLogin)
 	mux.HandleFunc("OPTIONS /v1/public/signups", s.handlePublicSignupOptions)
 	mux.HandleFunc("POST /v1/public/signups", s.handlePublicSignup)

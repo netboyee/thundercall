@@ -3,11 +3,11 @@ package voicedispatcher
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"thundercall-go/internal/logging"
 	twilioprovider "thundercall-go/internal/providers/twilio"
 	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
 )
@@ -32,6 +32,7 @@ type voiceSender interface {
 	BuildTestVoiceBody(intendedTo string, body string) string
 	BuildCollapsedTestVoiceBody(intendedTo string, body string) string
 	CollapseVoiceOverrideCalls() bool
+	VoiceFrom() string
 }
 
 type Service struct {
@@ -42,10 +43,15 @@ type Service struct {
 	retryDelay    time.Duration
 	waiter        turnWaiter
 	now           func() time.Time
-	logf          func(string, ...any)
+	infof         func(string, ...any)
+	warnf         func(string, ...any)
+	debugf        func(string, ...any)
+	cpsLimit      int
 
 	mu                 sync.Mutex
 	collapsedByMessage map[int64]string
+	recentDispatches   []time.Time
+	messageDispatches  map[int64]int
 }
 
 func NewService(
@@ -60,6 +66,7 @@ func NewService(
 		retryDelay = 30 * time.Second
 	}
 
+	logger := logging.New("voice-dispatcher")
 	return &Service{
 		attempts:           attempts,
 		usersMessages:      usersMessages,
@@ -68,9 +75,19 @@ func NewService(
 		retryDelay:         retryDelay,
 		waiter:             waiter,
 		now:                func() time.Time { return time.Now().UTC() },
-		logf:               log.Printf,
+		infof:              logger.Infof,
+		warnf:              logger.Warnf,
+		debugf:             logger.Debugf,
 		collapsedByMessage: make(map[int64]string),
+		messageDispatches:  make(map[int64]int),
 	}
+}
+
+func (s *Service) SetCallsPerSecond(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	s.cpsLimit = limit
 }
 
 func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord) error {
@@ -107,17 +124,6 @@ func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrep
 		}
 	}
 
-	if s.logf != nil {
-		s.logf(
-			"voice-dispatcher placing call attempt_id=%d message_id=%d user_id=%d intended_destination=%s send_to=%s",
-			record.Attempt.ID,
-			record.MessageID,
-			record.UserID,
-			record.Attempt.Destination,
-			sendTo,
-		)
-	}
-
 	result, err := s.sender.SendVoice(ctx, twilioprovider.VoiceRequest{
 		To:            sendTo,
 		Body:          body,
@@ -125,11 +131,33 @@ func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrep
 		AlertTypeCode: record.AlertTypeCode,
 		AccountID:     int64Value(record.AccountID),
 	})
+	persistCtx := context.WithoutCancel(ctx)
 	if err != nil {
-		return s.handleSendError(ctx, record, err)
+		return s.handleSendError(persistCtx, record, sendTo, err)
 	}
 
-	return s.markSent(ctx, record, result.ProviderMessageID, true)
+	if err := s.markSent(persistCtx, record, result.ProviderMessageID, true); err != nil {
+		return err
+	}
+
+	dispatchedAt := s.now()
+	currentCPS, messageDispatchCount := s.recordDispatch(record.MessageID, dispatchedAt)
+	if s.infof != nil {
+		s.infof(
+			"event=voice_call_sent message_id=%d user_id=%d attempt_id=%d provider_message_id=%s from=%s intended_to=%s send_to=%s cps_current=%.2f cps_limit=%d message_dispatch_count=%d",
+			record.MessageID,
+			record.UserID,
+			record.Attempt.ID,
+			blankDash(result.ProviderMessageID),
+			blankDash(s.sender.VoiceFrom()),
+			blankDash(record.Attempt.Destination),
+			blankDash(sendTo),
+			currentCPS,
+			s.cpsLimit,
+			messageDispatchCount,
+		)
+	}
+	return nil
 }
 
 func (s *Service) collapsedProviderMessageID(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord) (string, bool, error) {
@@ -159,7 +187,7 @@ func (s *Service) collapsedProviderMessageID(ctx context.Context, record deliver
 	return providerMessageID, true, nil
 }
 
-func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, sendErr error) error {
+func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, sendTo string, sendErr error) error {
 	errMessage := sendErr.Error()
 	if twilioprovider.IsRetryableError(sendErr) {
 		dispatchAfter := s.now().Add(s.retryDelay)
@@ -172,12 +200,15 @@ func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsre
 				return err
 			}
 		}
-		if s.logf != nil {
-			s.logf(
-				"voice-dispatcher requeued retryable call attempt_id=%d message_id=%d user_id=%d dispatch_after=%s error=%v",
+		if s.warnf != nil {
+			s.warnf(
+				"event=voice_call_retry attempt_id=%d message_id=%d user_id=%d from=%s intended_to=%s send_to=%s dispatch_after=%s error=%q",
 				record.Attempt.ID,
 				record.MessageID,
 				record.UserID,
+				blankDash(s.sender.VoiceFrom()),
+				blankDash(record.Attempt.Destination),
+				blankDash(sendTo),
 				dispatchAfter.Format(time.RFC3339),
 				sendErr,
 			)
@@ -196,6 +227,18 @@ func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsre
 		if err := s.notifications.UpdateStatus(ctx, *record.Attempt.NotificationID, "failed", record.MessageID, &requestedAt, nil, nil); err != nil {
 			return err
 		}
+	}
+	if s.warnf != nil {
+		s.warnf(
+			"event=voice_call_failed attempt_id=%d message_id=%d user_id=%d from=%s intended_to=%s send_to=%s error=%q",
+			record.Attempt.ID,
+			record.MessageID,
+			record.UserID,
+			blankDash(s.sender.VoiceFrom()),
+			blankDash(record.Attempt.Destination),
+			blankDash(sendTo),
+			sendErr,
+		)
 	}
 	return nil
 }
@@ -229,4 +272,29 @@ func int64Value(value *int64) int64 {
 		return 0
 	}
 	return *value
+}
+
+func (s *Service) recordDispatch(messageID int64, at time.Time) (float64, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cutoff := at.Add(-1 * time.Second)
+	kept := s.recentDispatches[:0]
+	for _, seenAt := range s.recentDispatches {
+		if !seenAt.Before(cutoff) {
+			kept = append(kept, seenAt)
+		}
+	}
+	s.recentDispatches = append(kept, at)
+
+	s.messageDispatches[messageID]++
+	return float64(len(s.recentDispatches)), s.messageDispatches[messageID]
+}
+
+func blankDash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
 }

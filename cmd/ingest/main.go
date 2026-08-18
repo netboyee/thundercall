@@ -14,6 +14,7 @@ import (
 	"thundercall-go/internal/database"
 	"thundercall-go/internal/health"
 	"thundercall-go/internal/ingest"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/nwws"
 	"thundercall-go/internal/queue/redisstreams"
 	outboxeventsrepo "thundercall-go/internal/repositories/outboxevents"
@@ -24,6 +25,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	logging.Configure(cfg.LogLevel)
 
 	switch currentCommand() {
 	case "healthcheck":
@@ -45,6 +47,7 @@ func currentCommand() string {
 }
 
 func run(cfg config.Config) error {
+	logger := logging.New("ingest")
 	if !cfg.MySQL.Enabled() {
 		return fmt.Errorf("THUNDERCALL_MYSQL_DSN is required for ingest")
 	}
@@ -74,7 +77,7 @@ func run(cfg config.Config) error {
 	heartbeat := health.NewFileHeartbeat(cfg.Health.HeartbeatPath)
 	touchHeartbeat := func() {
 		if err := heartbeat.Touch(); err != nil {
-			log.Printf("update ingest heartbeat: %v", err)
+			logger.Warnf("event=heartbeat_update_error error=%q", err)
 		}
 	}
 	touchHeartbeat()
@@ -82,19 +85,7 @@ func run(cfg config.Config) error {
 	service := ingest.NewService(db, cfg.Redis.StreamKey, cfg.NWWS.Products)
 	relay := ingest.NewOutboxRelay(outboxeventsrepo.New(db), queue, cfg.Ingest.PublishBatchSize)
 	consumer := ingest.NewNWWSConsumer(cfg.NWWS, func(ctx context.Context, envelope nwws.StanzaEnvelope) error {
-		result, err := service.ProcessEnvelope(ctx, envelope)
-		if err == nil {
-			log.Printf(
-				"processed NWWS envelope id=%s awips=%s accepted=%d ignored=%d duplicate=%t source_message_id=%d message_ids=%v",
-				envelope.ExternalID,
-				envelope.AWIPSID,
-				result.AcceptedCount,
-				result.IgnoredCount,
-				result.Duplicate,
-				result.SourceMessageID,
-				result.MessageIDs,
-			)
-		}
+		_, err := service.ProcessEnvelope(ctx, envelope)
 		return err
 	})
 	consumer.SetHeartbeatTouch(touchHeartbeat)
@@ -104,7 +95,7 @@ func run(cfg config.Config) error {
 		relayErr <- relay.Run(ctx, cfg.Ingest.PublishInterval)
 	}()
 
-	log.Printf("thundercall ingest is connecting to NWWS room %s", cfg.NWWS.RoomJID())
+	logger.Infof("event=start room=%s", cfg.NWWS.RoomJID())
 	if err := consumer.RunForever(ctx, 10*time.Second); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run NWWS consumer: %w", err)
 	}

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"thundercall-go/internal/logging"
 	messagesrepo "thundercall-go/internal/repositories/messages"
 	"thundercall-go/internal/thundercall"
 )
@@ -22,12 +22,13 @@ type Service struct {
 }
 
 func NewService(messages *messagesrepo.Repository, resolver thundercall.RecipientResolver, dispatcher thundercall.Dispatcher) *Service {
+	logger := logging.New("worker")
 	return &Service{
 		messages:   messages,
 		resolver:   resolver,
 		dispatcher: dispatcher,
 		now:        func() time.Time { return time.Now().UTC() },
-		logf:       log.Printf,
+		logf:       logger.Infof,
 	}
 }
 
@@ -53,9 +54,11 @@ func (s *Service) ProcessMessage(ctx context.Context, messageID int64) error {
 	}
 	if s.logf != nil {
 		s.logf(
-			"worker resolved message_id=%d event_code=%s alert_type=%s recipients=%d polygon=%t fips=%d zones=%d",
+			"event=recipient_resolution message_id=%d source_message_id=%d event_code=%s action=%s alert_type=%s matched_users=%d polygon=%t fips=%d zones=%d",
 			message.ID,
+			int64Value(message.SourceMessageID),
 			message.EventCode,
+			dashString(message.VTECAction),
 			message.AlertTypeCode,
 			len(matches),
 			stringValue(message.PolygonWKT) != "",
@@ -80,6 +83,20 @@ func (s *Service) ProcessMessage(ctx context.Context, messageID int64) error {
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
+	}
+	return *value
+}
+
+func dashString(value *string) string {
+	if value == nil || *value == "" {
+		return "-"
+	}
+	return *value
+}
+
+func int64Value(value *int64) int64 {
+	if value == nil {
+		return 0
 	}
 	return *value
 }

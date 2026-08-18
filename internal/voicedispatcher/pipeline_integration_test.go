@@ -97,9 +97,12 @@ func TestIntegrationIngestOutboxWorkerVoiceDispatcherPipeline(t *testing.T) {
 
 	sender := &recordingVoiceSender{}
 	dispatchService := NewService(attemptRepo, userMessageRepo, notificationRepo, sender, &fakeWaiter{}, 30*time.Second)
-	dispatchService.logf = func(string, ...any) {}
+	dispatchService.infof = func(string, ...any) {}
+	dispatchService.warnf = func(string, ...any) {}
+	dispatchService.debugf = func(string, ...any) {}
 	voiceRunner := NewRunner(attemptRepo, dispatchService, "voice-pipeline", 10, time.Minute, 25*time.Millisecond)
-	voiceRunner.logf = func(string, ...any) {}
+	voiceRunner.infof = func(string, ...any) {}
+	voiceRunner.warnf = func(string, ...any) {}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -268,10 +271,13 @@ func TestIntegrationVoiceDispatcherRespectsCPSAndFairnessAcrossMessages(t *testi
 
 	sender := &recordingVoiceSender{}
 	service := NewService(attemptRepo, userMessageRepo, nil, sender, NewPacer(4), 30*time.Second)
-	service.logf = func(string, ...any) {}
+	service.infof = func(string, ...any) {}
+	service.warnf = func(string, ...any) {}
+	service.debugf = func(string, ...any) {}
 
 	runner := NewRunner(attemptRepo, service, "voice-cps", 12, time.Minute, 20*time.Millisecond)
-	runner.logf = func(string, ...any) {}
+	runner.infof = func(string, ...any) {}
+	runner.warnf = func(string, ...any) {}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -363,6 +369,10 @@ func (s *recordingVoiceSender) BuildCollapsedTestVoiceBody(_ string, body string
 
 func (s *recordingVoiceSender) CollapseVoiceOverrideCalls() bool {
 	return false
+}
+
+func (s *recordingVoiceSender) VoiceFrom() string {
+	return "+18005551212"
 }
 
 func (s *recordingVoiceSender) CallCount() int {

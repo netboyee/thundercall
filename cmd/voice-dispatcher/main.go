@@ -13,6 +13,7 @@ import (
 	"thundercall-go/internal/config"
 	"thundercall-go/internal/database"
 	"thundercall-go/internal/health"
+	"thundercall-go/internal/logging"
 	twilioprovider "thundercall-go/internal/providers/twilio"
 	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
 	notificationsrepo "thundercall-go/internal/repositories/notifications"
@@ -25,6 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	logging.Configure(cfg.LogLevel)
 
 	switch currentCommand() {
 	case "healthcheck":
@@ -46,6 +48,7 @@ func currentCommand() string {
 }
 
 func run(cfg config.Config) error {
+	logger := logging.New("voice-dispatcher")
 	if !cfg.MySQL.Enabled() {
 		return fmt.Errorf("THUNDERCALL_MYSQL_DSN is required for voice-dispatcher")
 	}
@@ -62,7 +65,7 @@ func run(cfg config.Config) error {
 	heartbeat := health.NewFileHeartbeat(cfg.Health.HeartbeatPath)
 	touchHeartbeat := func() {
 		if err := heartbeat.Touch(); err != nil {
-			log.Printf("update voice-dispatcher heartbeat: %v", err)
+			logger.Warnf("event=heartbeat_update_error error=%q", err)
 		}
 	}
 	touchHeartbeat()
@@ -75,6 +78,7 @@ func run(cfg config.Config) error {
 		voicedispatcher.NewPacer(cfg.Voice.CallsPerSecond),
 		cfg.Voice.RetryDelay,
 	)
+	service.SetCallsPerSecond(cfg.Voice.CallsPerSecond)
 	runner := voicedispatcher.NewRunner(
 		deliveryattemptsrepo.New(db),
 		service,
@@ -85,8 +89,8 @@ func run(cfg config.Config) error {
 	)
 	runner.SetHeartbeatTouch(touchHeartbeat)
 
-	log.Printf(
-		"thundercall voice-dispatcher is claiming queued voice attempts as consumer %s with cps=%d batch=%d",
+	logger.Infof(
+		"event=start consumer=%s cps=%d batch=%d",
 		cfg.Voice.ConsumerName,
 		cfg.Voice.CallsPerSecond,
 		cfg.Voice.ClaimBatchSize,

@@ -256,25 +256,30 @@ type Notification struct {
 }
 
 type DeliveryAttempt struct {
-	ID                int64
-	UserMessageID     int64
-	NotificationID    *int64
-	Channel           Channel
-	AttemptNumber     int
-	Destination       string
-	Provider          *string
-	ProviderMessageID *string
-	Status            string
-	ErrorMessage      *string
-	RequestedAt       time.Time
-	DispatchAfter     time.Time
-	LeaseToken        *string
-	LeaseOwner        *string
-	LeaseExpiresAt    *time.Time
-	SentAt            *time.Time
-	DeliveredAt       *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                      int64
+	UserMessageID           int64
+	NotificationID          *int64
+	Channel                 Channel
+	AttemptNumber           int
+	Destination             string
+	Provider                *string
+	ProviderMessageID       *string
+	Status                  string
+	ProviderStatus          *string
+	ProviderAnsweredBy      *string
+	ProviderDurationSeconds *int
+	ErrorMessage            *string
+	ProviderPayloadJSON     *string
+	ProviderLastCallbackAt  *time.Time
+	RequestedAt             time.Time
+	DispatchAfter           time.Time
+	LeaseToken              *string
+	LeaseOwner              *string
+	LeaseExpiresAt          *time.Time
+	SentAt                  *time.Time
+	DeliveredAt             *time.Time
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 type SourceMessage struct {

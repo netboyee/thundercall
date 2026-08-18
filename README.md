@@ -193,6 +193,12 @@ These are the env vars loaded by `internal/config`.
 | `THUNDERCALL_REDIS_CLAIM_IDLE` | `30s` | Minimum idle before pending messages may be auto-claimed. |
 | `THUNDERCALL_REDIS_BATCH_SIZE` | `25` | General Redis batch size default. |
 
+### Logging
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `THUNDERCALL_LOG_LEVEL` | `info` | Supported values: `debug`, `info`, `warn`, `error`. |
+
 ### NWWS
 
 | Variable | Default | Notes |
@@ -205,7 +211,7 @@ These are the env vars loaded by `internal/config`.
 | `THUNDERCALL_NWWS_JOIN_PASSWORD` | same as `THUNDERCALL_NWWS_PASSWORD` | Optional separate room password. |
 | `THUNDERCALL_NWWS_NICK` | same as `THUNDERCALL_NWWS_USERNAME` | Optional MUC nick override. |
 | `THUNDERCALL_NWWS_PRODUCTS` | `SVR,FFW,TOR,WSW,TSU` | Allowed products persisted by ingest. |
-| `THUNDERCALL_NWWS_LOG_FULL_MESSAGES` | `false` | Log complete NWWS bulletin text. |
+| `THUNDERCALL_NWWS_LOG_FULL_MESSAGES` | `false` | When `true`, emits full NWWS bulletin text at `DEBUG` level. |
 | `THUNDERCALL_NWWS_IDLE_TIMEOUT` | `5m` | Consumer idle timeout watchdog. |
 
 ### Ingest
@@ -303,6 +309,9 @@ Twilio voice behavior:
 | --- | --- | --- |
 | `THUNDERCALL_RUN_LIVE_TWILIO_TEST` | disabled | Must be `1` or `true` to place a real call. |
 | `THUNDERCALL_LIVE_TWILIO_TEST_TO` | none | Destination for the real test call. |
+| `THUNDERCALL_LIVE_TWILIO_CALLBACK_URL` | empty | Optional public callback URL for the live test. When set, the live test also validates Twilio webhook persistence end to end. Use the full path, usually `/api/providers/twilio/voice/status`. |
+| `THUNDERCALL_LIVE_TWILIO_CALLBACK_BIND_ADDR` | `:18080` | Local bind address for the temporary callback server started by the live test. Point your public tunnel/domain at this port. |
+| `THUNDERCALL_LIVE_TWILIO_CALLBACK_TIMEOUT` | `2m` | How long the live test waits for Twilio to deliver the final webhook callback. |
 
 ## Backup Script Environment Variables
 
@@ -404,7 +413,7 @@ Run with `go test -tags integration ...`.
   - verifies paced dispatch and cross-message fairness under concurrent queued work
 - `internal/voicedispatcher/live_twilio_integration_test.go`
   - `TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient`
-  - places one real Twilio call, then verifies the later update is suppressed for the same recipient
+  - places one real Twilio call, verifies the later update is suppressed for the same recipient, and when `THUNDERCALL_LIVE_TWILIO_CALLBACK_URL` is set also verifies the real Twilio webhook updates `delivery_attempts`, `users_messages`, and `notifications`
 
 ### DB-Backed Integration-Style Test
 
@@ -445,6 +454,28 @@ GOCACHE=/tmp/go-build \
 go test -tags integration ./internal/voicedispatcher -run TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient -count=1 -v
 ```
 
+Live Twilio integration test with real callback validation:
+
+```bash
+THUNDERCALL_RUN_LIVE_TWILIO_TEST=1 \
+THUNDERCALL_LIVE_TWILIO_TEST_TO=+14075551212 \
+THUNDERCALL_LIVE_TWILIO_CALLBACK_URL='https://your-public-host.example/api/providers/twilio/voice/status' \
+THUNDERCALL_LIVE_TWILIO_CALLBACK_BIND_ADDR=':18080' \
+THUNDERCALL_LIVE_TWILIO_CALLBACK_TIMEOUT='2m' \
+THUNDERCALL_TEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/thundercall_test?charset=utf8mb4&parseTime=true&loc=UTC' \
+TWILIO_ACCOUNT_SID=... \
+TWILIO_AUTH_TOKEN=... \
+TWILIO_VOICE_FROM=... \
+GOCACHE=/tmp/go-build \
+go test -tags integration ./internal/voicedispatcher -run TestLiveTwilioCallsInitialEventAndSuppressesEXTForSameRecipient -count=1 -v
+```
+
+Notes:
+
+- the test starts a temporary local callback server on `THUNDERCALL_LIVE_TWILIO_CALLBACK_BIND_ADDR`
+- your public callback URL must forward to that local port and preserve forwarded host/proto headers for signature validation
+- the live callback assertion accepts either a completed call or a final failed outcome such as `busy`, `no-answer`, or `canceled`, but it requires the callback rows to be persisted consistently
+
 ## MySQL Backups
 
 Run the host-side backup script:
@@ -468,8 +499,6 @@ Sample cron entry:
 
 ## Near-Term Next Steps
 
-- add Twilio voice status callback ingestion so call outcomes move beyond
-  queued/sent/failed
 - add operator write flows beyond basic user/location creation
 - add SMS/email execution only when product scope calls for it
 - continue validating Go-vs-legacy recipient parity during cutover

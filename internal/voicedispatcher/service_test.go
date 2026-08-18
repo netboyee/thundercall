@@ -97,6 +97,33 @@ func TestServiceProcessAttemptCollapsesOverrideCallsAfterFirstSuccess(t *testing
 	}
 }
 
+func TestServiceProcessAttemptPersistsSuccessAfterContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newServiceFixture()
+	fixture.attempts.failOnCanceledContext = true
+	fixture.usersMessages.failOnCanceledContext = true
+	fixture.notifications.failOnCanceledContext = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fixture.sender.afterSend = cancel
+
+	record := fixture.record(105, 205, 305, "+15550000050")
+	if err := fixture.service.ProcessAttempt(ctx, record); err != nil {
+		t.Fatalf("ProcessAttempt() error = %v", err)
+	}
+
+	if got := fixture.attempts.updatedStatuses[record.Attempt.ID]; got != "sent" {
+		t.Fatalf("attempt status = %q, want sent", got)
+	}
+	if got := fixture.usersMessages.statuses[record.Attempt.UserMessageID]; got != "sent" {
+		t.Fatalf("user message status = %q, want sent", got)
+	}
+	if got := fixture.notifications.statuses[*record.Attempt.NotificationID]; got != "sent" {
+		t.Fatalf("notification status = %q, want sent", got)
+	}
+}
+
 type serviceFixture struct {
 	service       *Service
 	attempts      *fakeAttemptsRepository
@@ -118,7 +145,9 @@ func newServiceFixture() *serviceFixture {
 	sender := &fakeVoiceSender{}
 
 	service := NewService(attempts, usersMessages, notifications, sender, &fakeWaiter{}, 30*time.Second)
-	service.logf = func(string, ...any) {}
+	service.infof = func(string, ...any) {}
+	service.warnf = func(string, ...any) {}
+	service.debugf = func(string, ...any) {}
 
 	return &serviceFixture{
 		service:       service,
@@ -154,14 +183,18 @@ func (f *serviceFixture) record(attemptID int64, userMessageID int64, notificati
 }
 
 type fakeAttemptsRepository struct {
-	updatedStatuses    map[int64]string
-	providerMessageIDs map[int64]string
-	requeued           map[int64]time.Time
-	sentByMessage      map[int64]string
-	attemptMessages    map[int64]int64
+	updatedStatuses       map[int64]string
+	providerMessageIDs    map[int64]string
+	requeued              map[int64]time.Time
+	sentByMessage         map[int64]string
+	attemptMessages       map[int64]int64
+	failOnCanceledContext bool
 }
 
-func (r *fakeAttemptsRepository) GetLatestSentVoiceAttemptByMessageID(_ context.Context, messageID int64) (*deliveryattemptsrepo.VoiceDispatchRecord, error) {
+func (r *fakeAttemptsRepository) GetLatestSentVoiceAttemptByMessageID(ctx context.Context, messageID int64) (*deliveryattemptsrepo.VoiceDispatchRecord, error) {
+	if r.failOnCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	providerID, ok := r.sentByMessage[messageID]
 	if !ok {
 		return nil, nil
@@ -175,7 +208,10 @@ func (r *fakeAttemptsRepository) GetLatestSentVoiceAttemptByMessageID(_ context.
 	}, nil
 }
 
-func (r *fakeAttemptsRepository) UpdateStatus(_ context.Context, id int64, status string, providerMessageID *string, _ *string, _ *time.Time, _ *time.Time) error {
+func (r *fakeAttemptsRepository) UpdateStatus(ctx context.Context, id int64, status string, providerMessageID *string, _ *string, _ *time.Time, _ *time.Time) error {
+	if r.failOnCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	r.updatedStatuses[id] = status
 	if providerMessageID != nil {
 		r.providerMessageIDs[id] = *providerMessageID
@@ -188,25 +224,36 @@ func (r *fakeAttemptsRepository) UpdateStatus(_ context.Context, id int64, statu
 	return nil
 }
 
-func (r *fakeAttemptsRepository) Requeue(_ context.Context, id int64, _ *string, dispatchAfter time.Time) error {
+func (r *fakeAttemptsRepository) Requeue(ctx context.Context, id int64, _ *string, dispatchAfter time.Time) error {
+	if r.failOnCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	r.requeued[id] = dispatchAfter
 	return nil
 }
 
 type fakeUsersMessagesRepository struct {
-	statuses map[int64]string
+	statuses              map[int64]string
+	failOnCanceledContext bool
 }
 
-func (r *fakeUsersMessagesRepository) UpdateStatus(_ context.Context, id int64, status string, _ *time.Time) error {
+func (r *fakeUsersMessagesRepository) UpdateStatus(ctx context.Context, id int64, status string, _ *time.Time) error {
+	if r.failOnCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	r.statuses[id] = status
 	return nil
 }
 
 type fakeNotificationsRepository struct {
-	statuses map[int64]string
+	statuses              map[int64]string
+	failOnCanceledContext bool
 }
 
-func (r *fakeNotificationsRepository) UpdateStatus(_ context.Context, id int64, status string, _ int64, _ *time.Time, _ *time.Time, _ *time.Time) error {
+func (r *fakeNotificationsRepository) UpdateStatus(ctx context.Context, id int64, status string, _ int64, _ *time.Time, _ *time.Time, _ *time.Time) error {
+	if r.failOnCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	r.statuses[id] = status
 	return nil
 }
@@ -217,10 +264,14 @@ type fakeVoiceSender struct {
 	collapseOverride bool
 	calls            []twilioprovider.VoiceRequest
 	nextProviderID   int
+	afterSend        func()
 }
 
 func (s *fakeVoiceSender) SendVoice(_ context.Context, request twilioprovider.VoiceRequest) (twilioprovider.Result, error) {
 	s.calls = append(s.calls, request)
+	if s.afterSend != nil {
+		s.afterSend()
+	}
 	if s.sendErr != nil {
 		return twilioprovider.Result{}, s.sendErr
 	}
@@ -250,6 +301,10 @@ func (s *fakeVoiceSender) BuildCollapsedTestVoiceBody(intendedTo string, body st
 
 func (s *fakeVoiceSender) CollapseVoiceOverrideCalls() bool {
 	return s.overrideTo != "" && s.collapseOverride
+}
+
+func (s *fakeVoiceSender) VoiceFrom() string {
+	return "+18005551212"
 }
 
 type fakeWaiter struct{}

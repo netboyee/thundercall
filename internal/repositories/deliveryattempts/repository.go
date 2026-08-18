@@ -29,6 +29,18 @@ type VoiceDispatchRecord struct {
 	NotificationID *int64
 }
 
+type VoiceCallbackUpdate struct {
+	Status                  string
+	ProviderStatus          *string
+	ProviderAnsweredBy      *string
+	ProviderDurationSeconds *int
+	ErrorMessage            *string
+	ProviderPayloadJSON     *string
+	ProviderLastCallbackAt  time.Time
+	SentAt                  *time.Time
+	DeliveredAt             *time.Time
+}
+
 func New(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
@@ -52,8 +64,9 @@ func (r *Repository) Create(ctx context.Context, attempt *models.DeliveryAttempt
 		ctx,
 		`INSERT INTO delivery_attempts (
 			users_message_id, notification_id, channel, attempt_number, destination, provider, provider_message_id,
-			status, error_message, requested_at, dispatch_after, lease_token, lease_owner, lease_expires_at, sent_at, delivered_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			status, provider_status, provider_answered_by, provider_duration_seconds, error_message, provider_payload_json, provider_last_callback_at,
+			requested_at, dispatch_after, lease_token, lease_owner, lease_expires_at, sent_at, delivered_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.UserMessageID,
 		sqlutil.Int64Value(attempt.NotificationID),
 		string(attempt.Channel),
@@ -62,7 +75,12 @@ func (r *Repository) Create(ctx context.Context, attempt *models.DeliveryAttempt
 		sqlutil.StringValue(attempt.Provider),
 		sqlutil.StringValue(attempt.ProviderMessageID),
 		attempt.Status,
+		sqlutil.StringValue(attempt.ProviderStatus),
+		sqlutil.StringValue(attempt.ProviderAnsweredBy),
+		sqlutil.IntValue(attempt.ProviderDurationSeconds),
 		sqlutil.StringValue(attempt.ErrorMessage),
+		sqlutil.StringValue(attempt.ProviderPayloadJSON),
+		sqlutil.TimeValue(attempt.ProviderLastCallbackAt),
 		attempt.RequestedAt,
 		attempt.DispatchAfter,
 		sqlutil.StringValue(attempt.LeaseToken),
@@ -112,6 +130,35 @@ func (r *Repository) UpdateStatus(ctx context.Context, id int64, status string, 
 		sqlutil.StringValue(errorMessage),
 		sqlutil.TimeValue(sentAt),
 		sqlutil.TimeValue(deliveredAt),
+		id,
+	)
+	return err
+}
+
+func (r *Repository) UpdateVoiceCallback(ctx context.Context, id int64, update VoiceCallbackUpdate) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE delivery_attempts
+		 SET status = ?,
+		     provider_status = ?,
+		     provider_answered_by = ?,
+		     provider_duration_seconds = ?,
+		     error_message = ?,
+		     provider_payload_json = ?,
+		     provider_last_callback_at = ?,
+		     sent_at = ?,
+		     delivered_at = ?,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		update.Status,
+		sqlutil.StringValue(update.ProviderStatus),
+		sqlutil.StringValue(update.ProviderAnsweredBy),
+		sqlutil.IntValue(update.ProviderDurationSeconds),
+		sqlutil.StringValue(update.ErrorMessage),
+		sqlutil.StringValue(update.ProviderPayloadJSON),
+		update.ProviderLastCallbackAt,
+		sqlutil.TimeValue(update.SentAt),
+		sqlutil.TimeValue(update.DeliveredAt),
 		id,
 	)
 	return err
@@ -189,6 +236,52 @@ func (r *Repository) ListByNotificationID(ctx context.Context, notificationID in
 	}
 
 	return attempts, rows.Err()
+}
+
+func (r *Repository) ListByProviderMessageID(ctx context.Context, providerMessageID string) ([]models.DeliveryAttempt, error) {
+	rows, err := r.db.QueryContext(ctx, selectDeliveryAttemptSQL()+`
+	 WHERE provider_message_id = ?
+	 ORDER BY id`, providerMessageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var attempts []models.DeliveryAttempt
+	for rows.Next() {
+		attempt, err := scanDeliveryAttempt(rows)
+		if err != nil {
+			return nil, err
+		}
+		attempts = append(attempts, *attempt)
+	}
+
+	return attempts, rows.Err()
+}
+
+func (r *Repository) ListVoiceDispatchRecordsByProviderMessageID(ctx context.Context, providerMessageID string) ([]VoiceDispatchRecord, error) {
+	rows, err := r.db.QueryContext(
+		ctx,
+		selectVoiceDispatchSQL()+`
+		WHERE da.provider_message_id = ?
+		ORDER BY da.id`,
+		providerMessageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []VoiceDispatchRecord
+	for rows.Next() {
+		record, err := scanVoiceDispatchRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *record)
+	}
+
+	return records, rows.Err()
 }
 
 func (r *Repository) ClaimQueuedVoiceAttempts(ctx context.Context, leaseToken string, leaseOwner string, now time.Time, leaseDuration time.Duration, limit int) ([]VoiceDispatchRecord, error) {
@@ -291,7 +384,8 @@ type scanner interface {
 func selectDeliveryAttemptSQL() string {
 	return `
 		SELECT id, users_message_id, notification_id, channel, attempt_number, destination, provider, provider_message_id,
-		       status, error_message, requested_at, dispatch_after, lease_token, lease_owner, lease_expires_at,
+		       status, provider_status, provider_answered_by, provider_duration_seconds, error_message, provider_payload_json, provider_last_callback_at,
+		       requested_at, dispatch_after, lease_token, lease_owner, lease_expires_at,
 		       sent_at, delivered_at, created_at, updated_at
 		FROM delivery_attempts`
 }
@@ -308,7 +402,12 @@ func selectVoiceDispatchSQL() string {
 			da.provider,
 			da.provider_message_id,
 			da.status,
+			da.provider_status,
+			da.provider_answered_by,
+			da.provider_duration_seconds,
 			da.error_message,
+			da.provider_payload_json,
+			da.provider_last_callback_at,
 			da.requested_at,
 			da.dispatch_after,
 			da.lease_token,
@@ -341,18 +440,23 @@ func selectVoiceDispatchSQL() string {
 
 func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 	var (
-		attempt           models.DeliveryAttempt
-		notificationID    sql.NullInt64
-		channel           string
-		provider          sql.NullString
-		providerMessageID sql.NullString
-		errorMessage      sql.NullString
-		leaseToken        sql.NullString
-		leaseOwner        sql.NullString
-		sentAt            sql.NullTime
-		dispatchAfter     sql.NullTime
-		leaseExpiresAt    sql.NullTime
-		deliveredAt       sql.NullTime
+		attempt                 models.DeliveryAttempt
+		notificationID          sql.NullInt64
+		channel                 string
+		provider                sql.NullString
+		providerMessageID       sql.NullString
+		providerStatus          sql.NullString
+		providerAnsweredBy      sql.NullString
+		providerDurationSeconds sql.NullInt64
+		errorMessage            sql.NullString
+		providerPayloadJSON     sql.NullString
+		providerLastCallbackAt  sql.NullTime
+		leaseToken              sql.NullString
+		leaseOwner              sql.NullString
+		sentAt                  sql.NullTime
+		dispatchAfter           sql.NullTime
+		leaseExpiresAt          sql.NullTime
+		deliveredAt             sql.NullTime
 	)
 
 	if err := s.Scan(
@@ -365,7 +469,12 @@ func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 		&provider,
 		&providerMessageID,
 		&attempt.Status,
+		&providerStatus,
+		&providerAnsweredBy,
+		&providerDurationSeconds,
 		&errorMessage,
+		&providerPayloadJSON,
+		&providerLastCallbackAt,
 		&attempt.RequestedAt,
 		&dispatchAfter,
 		&leaseToken,
@@ -386,7 +495,12 @@ func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 	attempt.NotificationID = sqlutil.Int64Ptr(notificationID)
 	attempt.Provider = sqlutil.StringPtr(provider)
 	attempt.ProviderMessageID = sqlutil.StringPtr(providerMessageID)
+	attempt.ProviderStatus = sqlutil.StringPtr(providerStatus)
+	attempt.ProviderAnsweredBy = sqlutil.StringPtr(providerAnsweredBy)
+	attempt.ProviderDurationSeconds = sqlutil.IntPtr[int](providerDurationSeconds)
 	attempt.ErrorMessage = sqlutil.StringPtr(errorMessage)
+	attempt.ProviderPayloadJSON = sqlutil.StringPtr(providerPayloadJSON)
+	attempt.ProviderLastCallbackAt = sqlutil.TimePtr(providerLastCallbackAt)
 	attempt.DispatchAfter = timeOrZero(dispatchAfter)
 	attempt.LeaseToken = sqlutil.StringPtr(leaseToken)
 	attempt.LeaseOwner = sqlutil.StringPtr(leaseOwner)
@@ -398,22 +512,27 @@ func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
 
 func scanVoiceDispatchRecord(s scanner) (*VoiceDispatchRecord, error) {
 	var (
-		record            VoiceDispatchRecord
-		notificationID    sql.NullInt64
-		channel           string
-		provider          sql.NullString
-		providerMessageID sql.NullString
-		errorMessage      sql.NullString
-		dispatchAfter     sql.NullTime
-		leaseToken        sql.NullString
-		leaseOwner        sql.NullString
-		leaseExpiresAt    sql.NullTime
-		sentAt            sql.NullTime
-		deliveredAt       sql.NullTime
-		accountID         sql.NullInt64
-		nwsEventID        sql.NullInt64
-		title             sql.NullString
-		queueRank         int
+		record                  VoiceDispatchRecord
+		notificationID          sql.NullInt64
+		channel                 string
+		provider                sql.NullString
+		providerMessageID       sql.NullString
+		providerStatus          sql.NullString
+		providerAnsweredBy      sql.NullString
+		providerDurationSeconds sql.NullInt64
+		errorMessage            sql.NullString
+		providerPayloadJSON     sql.NullString
+		providerLastCallbackAt  sql.NullTime
+		dispatchAfter           sql.NullTime
+		leaseToken              sql.NullString
+		leaseOwner              sql.NullString
+		leaseExpiresAt          sql.NullTime
+		sentAt                  sql.NullTime
+		deliveredAt             sql.NullTime
+		accountID               sql.NullInt64
+		nwsEventID              sql.NullInt64
+		title                   sql.NullString
+		queueRank               int
 	)
 
 	if err := s.Scan(
@@ -426,7 +545,12 @@ func scanVoiceDispatchRecord(s scanner) (*VoiceDispatchRecord, error) {
 		&provider,
 		&providerMessageID,
 		&record.Attempt.Status,
+		&providerStatus,
+		&providerAnsweredBy,
+		&providerDurationSeconds,
 		&errorMessage,
+		&providerPayloadJSON,
+		&providerLastCallbackAt,
 		&record.Attempt.RequestedAt,
 		&dispatchAfter,
 		&leaseToken,
@@ -458,7 +582,12 @@ func scanVoiceDispatchRecord(s scanner) (*VoiceDispatchRecord, error) {
 	record.Attempt.NotificationID = sqlutil.Int64Ptr(notificationID)
 	record.Attempt.Provider = sqlutil.StringPtr(provider)
 	record.Attempt.ProviderMessageID = sqlutil.StringPtr(providerMessageID)
+	record.Attempt.ProviderStatus = sqlutil.StringPtr(providerStatus)
+	record.Attempt.ProviderAnsweredBy = sqlutil.StringPtr(providerAnsweredBy)
+	record.Attempt.ProviderDurationSeconds = sqlutil.IntPtr[int](providerDurationSeconds)
 	record.Attempt.ErrorMessage = sqlutil.StringPtr(errorMessage)
+	record.Attempt.ProviderPayloadJSON = sqlutil.StringPtr(providerPayloadJSON)
+	record.Attempt.ProviderLastCallbackAt = sqlutil.TimePtr(providerLastCallbackAt)
 	record.Attempt.DispatchAfter = timeOrZero(dispatchAfter)
 	record.Attempt.LeaseToken = sqlutil.StringPtr(leaseToken)
 	record.Attempt.LeaseOwner = sqlutil.StringPtr(leaseOwner)

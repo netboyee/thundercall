@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"thundercall-go/internal/events"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/queue/redisstreams"
 )
 
@@ -28,7 +28,8 @@ type Runner struct {
 	readCount  int64
 	block      time.Duration
 	retryDelay time.Duration
-	logf       func(string, ...any)
+	debugf     func(string, ...any)
+	warnf      func(string, ...any)
 	touch      func()
 }
 
@@ -46,7 +47,8 @@ func NewRunner(queue queueClient, service messageProcessor, readCount int64, blo
 		readCount:  readCount,
 		block:      block,
 		retryDelay: retryDelay,
-		logf:       log.Printf,
+		debugf:     logging.New("worker.runner").Debugf,
+		warnf:      logging.New("worker.runner").Warnf,
 	}
 }
 
@@ -70,7 +72,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 
 		if err := r.queue.EnsureGroup(ctx); err != nil {
-			r.logf("worker ensure redis stream consumer group: %v", err)
+			r.warnf("event=worker_ensure_group_failed error=%q", err)
 			if err := r.waitRetry(ctx); err != nil {
 				return err
 			}
@@ -80,7 +82,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 		claimed, _, err := r.queue.AutoClaim(ctx, "0-0", r.readCount)
 		if err != nil {
-			r.logf("worker auto-claim redis stream messages: %v", err)
+			r.warnf("event=worker_autoclaim_failed error=%q", err)
 			if err := r.waitRetry(ctx); err != nil {
 				return err
 			}
@@ -94,7 +96,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			r.logf("worker read redis stream consumer group: %v", err)
+			r.warnf("event=worker_read_group_failed error=%q", err)
 			if err := r.waitRetry(ctx); err != nil {
 				return err
 			}
@@ -115,24 +117,25 @@ func (r *Runner) processMessages(ctx context.Context, messages []redisstreams.St
 		case events.EventTypeMessageAccepted:
 			event, err := events.DecodeMessageAccepted(message.Payload)
 			if err != nil {
-				r.logf("worker dropping malformed stream message %s: %v", message.ID, err)
+				r.warnf("event=worker_drop_malformed stream_id=%s error=%q", message.ID, err)
 				r.ackBestEffort(ctx, message.ID, "malformed stream message")
 				continue
 			}
 
 			if err := r.service.ProcessMessage(ctx, event.MessageID); err != nil {
 				if errors.Is(err, ErrMessageNotFound) {
-					r.logf("worker dropping stream message %s for missing message %d", message.ID, event.MessageID)
+					r.warnf("event=worker_drop_missing stream_id=%s message_id=%d", message.ID, event.MessageID)
 					r.ackBestEffort(ctx, message.ID, "missing message")
 					continue
 				}
-				r.logf("worker leaving stream message %s pending for retry after processing error: %v", message.ID, err)
+				r.warnf("event=worker_process_retry stream_id=%s message_id=%d error=%q", message.ID, event.MessageID, err)
 				continue
 			}
+			r.debugf("event=worker_processed stream_id=%s message_id=%d", message.ID, event.MessageID)
 			r.markHealthy()
 			r.ackBestEffort(ctx, message.ID, "processed message")
 		default:
-			r.logf("worker dropping unsupported stream event %q (%s)", message.EventType, message.ID)
+			r.warnf("event=worker_drop_unsupported stream_id=%s event_type=%s", message.ID, message.EventType)
 			r.ackBestEffort(ctx, message.ID, "unsupported stream event")
 		}
 	}
@@ -146,7 +149,7 @@ func (r *Runner) markHealthy() {
 
 func (r *Runner) ackBestEffort(ctx context.Context, id string, reason string) {
 	if err := r.queue.Ack(ctx, id); err != nil {
-		r.logf("worker failed to ack stream message %s after %s: %v", id, reason, err)
+		r.warnf("event=worker_ack_failed stream_id=%s reason=%q error=%q", id, reason, err)
 	}
 }
 

@@ -110,16 +110,21 @@ type messageLocationItem struct {
 }
 
 type deliveryAttemptItem struct {
-	ID                int64      `json:"id"`
-	Channel           string     `json:"channel"`
-	Destination       string     `json:"destination"`
-	Provider          *string    `json:"provider,omitempty"`
-	ProviderMessageID *string    `json:"providerMessageId,omitempty"`
-	Status            string     `json:"status"`
-	ErrorMessage      *string    `json:"errorMessage,omitempty"`
-	RequestedAt       time.Time  `json:"requestedAt"`
-	SentAt            *time.Time `json:"sentAt,omitempty"`
-	DeliveredAt       *time.Time `json:"deliveredAt,omitempty"`
+	ID                      int64      `json:"id"`
+	Channel                 string     `json:"channel"`
+	Destination             string     `json:"destination"`
+	Provider                *string    `json:"provider,omitempty"`
+	ProviderMessageID       *string    `json:"providerMessageId,omitempty"`
+	Status                  string     `json:"status"`
+	ProviderStatus          *string    `json:"providerStatus,omitempty"`
+	ProviderAnsweredBy      *string    `json:"providerAnsweredBy,omitempty"`
+	ProviderOutcome         *string    `json:"providerOutcome,omitempty"`
+	ProviderDurationSeconds *int       `json:"providerDurationSeconds,omitempty"`
+	ErrorMessage            *string    `json:"errorMessage,omitempty"`
+	ProviderLastCallbackAt  *time.Time `json:"providerLastCallbackAt,omitempty"`
+	RequestedAt             time.Time  `json:"requestedAt"`
+	SentAt                  *time.Time `json:"sentAt,omitempty"`
+	DeliveredAt             *time.Time `json:"deliveredAt,omitempty"`
 }
 
 type messageDeliveryItem struct {
@@ -140,6 +145,38 @@ type messageDeliveryItem struct {
 type matchedLocationInfo struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
+}
+
+func deriveVoiceProviderOutcome(providerStatus *string, providerAnsweredBy *string) *string {
+	if providerStatus == nil {
+		return nil
+	}
+
+	status := strings.ToLower(strings.TrimSpace(*providerStatus))
+	if status == "" {
+		return nil
+	}
+
+	if status == "completed" && providerAnsweredBy != nil {
+		answeredBy := strings.ToLower(strings.TrimSpace(*providerAnsweredBy))
+		switch {
+		case answeredBy == "human":
+			outcome := "answered"
+			return &outcome
+		case strings.HasPrefix(answeredBy, "machine"):
+			outcome := "voicemail"
+			return &outcome
+		case answeredBy == "fax":
+			outcome := "fax"
+			return &outcome
+		case answeredBy == "unknown":
+			outcome := "completed_unknown"
+			return &outcome
+		}
+	}
+
+	outcome := status
+	return &outcome
 }
 
 func (s *Server) listMessages(ctx context.Context, accountID int64, filter messageListFilter) ([]messageListItem, int64, error) {
@@ -694,7 +731,11 @@ func (s *Server) listDeliveryAttemptsByUserMessageIDs(ctx context.Context, userM
 			provider,
 			provider_message_id,
 			status,
+			provider_status,
+			provider_answered_by,
+			provider_duration_seconds,
 			error_message,
+			provider_last_callback_at,
 			requested_at,
 			sent_at,
 			delivered_at
@@ -711,13 +752,17 @@ func (s *Server) listDeliveryAttemptsByUserMessageIDs(ctx context.Context, userM
 	result := make(map[int64][]deliveryAttemptItem, len(userMessageIDs))
 	for rows.Next() {
 		var (
-			item              deliveryAttemptItem
-			userMessageID     int64
-			provider          sql.NullString
-			providerMessageID sql.NullString
-			errorMessage      sql.NullString
-			sentAt            sql.NullTime
-			deliveredAt       sql.NullTime
+			item                    deliveryAttemptItem
+			userMessageID           int64
+			provider                sql.NullString
+			providerMessageID       sql.NullString
+			providerStatus          sql.NullString
+			providerAnsweredBy      sql.NullString
+			providerDurationSeconds sql.NullInt64
+			errorMessage            sql.NullString
+			providerLastCallbackAt  sql.NullTime
+			sentAt                  sql.NullTime
+			deliveredAt             sql.NullTime
 		)
 
 		if err := rows.Scan(
@@ -728,7 +773,11 @@ func (s *Server) listDeliveryAttemptsByUserMessageIDs(ctx context.Context, userM
 			&provider,
 			&providerMessageID,
 			&item.Status,
+			&providerStatus,
+			&providerAnsweredBy,
+			&providerDurationSeconds,
 			&errorMessage,
+			&providerLastCallbackAt,
 			&item.RequestedAt,
 			&sentAt,
 			&deliveredAt,
@@ -738,9 +787,14 @@ func (s *Server) listDeliveryAttemptsByUserMessageIDs(ctx context.Context, userM
 
 		item.Provider = sqlutil.StringPtr(provider)
 		item.ProviderMessageID = sqlutil.StringPtr(providerMessageID)
+		item.ProviderStatus = sqlutil.StringPtr(providerStatus)
+		item.ProviderAnsweredBy = sqlutil.StringPtr(providerAnsweredBy)
+		item.ProviderDurationSeconds = sqlutil.IntPtr[int](providerDurationSeconds)
 		item.ErrorMessage = sqlutil.StringPtr(errorMessage)
+		item.ProviderLastCallbackAt = sqlutil.TimePtr(providerLastCallbackAt)
 		item.SentAt = sqlutil.TimePtr(sentAt)
 		item.DeliveredAt = sqlutil.TimePtr(deliveredAt)
+		item.ProviderOutcome = deriveVoiceProviderOutcome(item.ProviderStatus, item.ProviderAnsweredBy)
 		result[userMessageID] = append(result[userMessageID], item)
 	}
 

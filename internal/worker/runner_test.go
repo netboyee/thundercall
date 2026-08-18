@@ -16,7 +16,8 @@ func TestRunnerProcessMessagesDropsMalformedAndUnsupportedEvents(t *testing.T) {
 	queue := &fakeQueue{}
 	processor := &fakeProcessor{}
 	runner := NewRunner(queue, processor, 25, 0, 0)
-	runner.logf = func(string, ...any) {}
+	runner.debugf = func(string, ...any) {}
+	runner.warnf = func(string, ...any) {}
 
 	validPayload, err := events.EncodeMessageAccepted(42)
 	if err != nil {
@@ -48,7 +49,8 @@ func TestRunnerProcessMessagesLeavesTransientFailuresPending(t *testing.T) {
 		},
 	}
 	runner := NewRunner(queue, processor, 25, 0, 0)
-	runner.logf = func(string, ...any) {}
+	runner.debugf = func(string, ...any) {}
+	runner.warnf = func(string, ...any) {}
 
 	payload100, err := events.EncodeMessageAccepted(100)
 	if err != nil {
@@ -83,7 +85,8 @@ func TestRunnerTouchesHeartbeatWhileProcessingMessages(t *testing.T) {
 	queue := &fakeQueue{}
 	processor := &fakeProcessor{}
 	runner := NewRunner(queue, processor, 25, 0, 0)
-	runner.logf = func(string, ...any) {}
+	runner.debugf = func(string, ...any) {}
+	runner.warnf = func(string, ...any) {}
 
 	touches := 0
 	runner.SetHeartbeatTouch(func() {

@@ -7,7 +7,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"mellium.im/xmpp/stanza"
 
 	"thundercall-go/internal/config"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/nwws"
 )
 
@@ -28,17 +28,22 @@ type NWWSConsumer struct {
 	cfg            config.NWWSConfig
 	handler        func(context.Context, nwws.StanzaEnvelope) error
 	reconnectDelay time.Duration
-	logf           func(string, ...any)
+	infof          func(string, ...any)
+	debugf         func(string, ...any)
+	warnf          func(string, ...any)
 	run            func(context.Context) error
 	touch          func()
 }
 
 func NewNWWSConsumer(cfg config.NWWSConfig, handler func(context.Context, nwws.StanzaEnvelope) error) *NWWSConsumer {
+	logger := logging.New("ingest.nwws")
 	consumer := &NWWSConsumer{
 		cfg:            cfg,
 		handler:        handler,
 		reconnectDelay: 10 * time.Second,
-		logf:           log.Printf,
+		infof:          logger.Infof,
+		debugf:         logger.Debugf,
+		warnf:          logger.Warnf,
 	}
 	consumer.run = consumer.runSession
 	return consumer
@@ -64,9 +69,9 @@ func (c *NWWSConsumer) RunForever(ctx context.Context, reconnectDelay time.Durat
 		}
 
 		if err != nil {
-			c.logf("NWWS consumer error: %v", err)
+			c.warnf("event=nwws_session_error error=%q", err)
 		} else {
-			c.logf("NWWS consumer disconnected; reconnecting")
+			c.warnf("event=nwws_session_disconnect reconnect_in=%s", reconnectDelay)
 		}
 
 		timer := time.NewTimer(reconnectDelay)
@@ -103,7 +108,7 @@ func (c *NWWSConsumer) runSession(ctx context.Context) error {
 		return fmt.Errorf("dial NWWS XMPP session: %w", err)
 	}
 	var sessionCleanup sync.Once
-	defer closeIOAsync(&sessionCleanup, "NWWS XMPP session", session, c.logf)
+	defer closeIOAsync(&sessionCleanup, "NWWS XMPP session", session, c.warnf)
 
 	mucClient := &muc.Client{}
 	activity := make(chan struct{}, 1)
@@ -118,16 +123,16 @@ func (c *NWWSConsumer) runSession(ctx context.Context) error {
 				default:
 				}
 			}
-			envelope, ok, err := decodeNWWSGroupChat(r, c.cfg.LogFullMessages, c.logf)
+			envelope, ok, err := decodeNWWSGroupChat(r, c.cfg.LogFullMessages, c.debugf, c.warnf)
 			if err != nil {
-				c.logf("decode NWWS groupchat payload: %v", err)
+				c.warnf("event=nwws_decode_error error=%q", err)
 				return nil
 			}
 			if !ok {
 				return nil
 			}
 			if err := c.handler(ctx, envelope); err != nil {
-				c.logf("process NWWS envelope %q: %v", envelope.ExternalID, err)
+				c.warnf("event=nwws_process_error external_id=%s awips=%s error=%q", envelope.ExternalID, envelope.AWIPSID, err)
 			}
 			return nil
 		}),
@@ -155,13 +160,13 @@ func (c *NWWSConsumer) runSession(ctx context.Context) error {
 		return fmt.Errorf("join NWWS room %s: %w", roomJID.Bare().String(), err)
 	}
 	var channelCleanup sync.Once
-	defer leaveNWWSChannelAsync(&channelCleanup, channel, c.logf)
+	defer leaveNWWSChannelAsync(&channelCleanup, channel, c.warnf)
 	c.markHealthy()
-	c.logf("joined NWWS room %s as %s", roomJID.Bare().String(), roomJID.Resourcepart())
+	c.infof("event=nwws_join room=%s nick=%s", roomJID.Bare().String(), roomJID.Resourcepart())
 
 	var idleErr <-chan error
 	if c.cfg.IdleTimeout > 0 {
-		idleErr = monitorNWWSIdleSession(ctx, c.cfg.IdleTimeout, activity, c.logf)
+		idleErr = monitorNWWSIdleSession(ctx, c.cfg.IdleTimeout, activity, c.warnf)
 	}
 
 	select {
@@ -183,7 +188,7 @@ func (c *NWWSConsumer) markHealthy() {
 	}
 }
 
-func decodeNWWSGroupChat(r xmlstream.TokenReadEncoder, logFullMessages bool, logf func(string, ...any)) (nwws.StanzaEnvelope, bool, error) {
+func decodeNWWSGroupChat(r xmlstream.TokenReadEncoder, logFullMessages bool, debugf func(string, ...any), warnf func(string, ...any)) (nwws.StanzaEnvelope, bool, error) {
 	var raw bytes.Buffer
 	encoder := xml.NewEncoder(&raw)
 	tee := xmlstream.TeeReader(r, encoder)
@@ -209,9 +214,9 @@ func decodeNWWSGroupChat(r xmlstream.TokenReadEncoder, logFullMessages bool, log
 
 	xhtmlBody := extractXHTMLBodyFromRawMessage(rawXML)
 	payloadSource, selectedPayload := selectEnvelopePayloadSource(payload.Body, xhtmlBody, payload.Extension.RawPayload)
-	if logFullMessages && logf != nil {
-		logf(
-			"received NWWS message id=%s awips=%s source=%s payload:\n%s",
+	if logFullMessages && debugf != nil {
+		debugf(
+			"event=nwws_payload external_id=%s awips=%s payload_source=%s payload=%q",
 			payload.Extension.ExternalID,
 			payload.Extension.AWIPSID,
 			payloadSource,
@@ -219,8 +224,8 @@ func decodeNWWSGroupChat(r xmlstream.TokenReadEncoder, logFullMessages bool, log
 		)
 	}
 	if strings.TrimSpace(payload.Extension.RawPayload) == "" {
-		logf(
-			"NWWS stanza missing extension payload awips=%s id=%s xhtml_len=%d inner=%q",
+		warnf(
+			"event=nwws_missing_extension_payload awips=%s external_id=%s xhtml_len=%d inner=%q",
 			payload.Extension.AWIPSID,
 			payload.Extension.ExternalID,
 			len(xhtmlBody),
@@ -240,7 +245,7 @@ func decodeNWWSGroupChat(r xmlstream.TokenReadEncoder, logFullMessages bool, log
 	return envelope, true, err
 }
 
-func monitorNWWSIdleSession(ctx context.Context, idleTimeout time.Duration, activity <-chan struct{}, logf func(string, ...any)) <-chan error {
+func monitorNWWSIdleSession(ctx context.Context, idleTimeout time.Duration, activity <-chan struct{}, warnf func(string, ...any)) <-chan error {
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -261,8 +266,8 @@ func monitorNWWSIdleSession(ctx context.Context, idleTimeout time.Duration, acti
 				timer.Reset(idleTimeout)
 			case <-timer.C:
 				err := fmt.Errorf("nwws session idle for %s", idleTimeout)
-				if logf != nil {
-					logf("%v; forcing reconnect", err)
+				if warnf != nil {
+					warnf("event=nwws_idle_timeout error=%q", err)
 				}
 				errCh <- err
 				close(errCh)

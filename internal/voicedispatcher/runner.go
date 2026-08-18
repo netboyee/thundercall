@@ -3,10 +3,10 @@ package voicedispatcher
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync/atomic"
 	"time"
 
+	"thundercall-go/internal/logging"
 	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
 )
 
@@ -26,7 +26,8 @@ type Runner struct {
 	claimLease  time.Duration
 	idleSleep   time.Duration
 	now         func() time.Time
-	logf        func(string, ...any)
+	infof       func(string, ...any)
+	warnf       func(string, ...any)
 	touch       func()
 	leaseSerial uint64
 }
@@ -42,6 +43,7 @@ func NewRunner(attempts claimsRepository, processor attemptProcessor, consumer s
 		idleSleep = 2 * time.Second
 	}
 
+	logger := logging.New("voice-dispatcher.runner")
 	return &Runner{
 		attempts:   attempts,
 		processor:  processor,
@@ -50,7 +52,8 @@ func NewRunner(attempts claimsRepository, processor attemptProcessor, consumer s
 		claimLease: claimLease,
 		idleSleep:  idleSleep,
 		now:        func() time.Time { return time.Now().UTC() },
-		logf:       log.Printf,
+		infof:      logger.Infof,
+		warnf:      logger.Warnf,
 	}
 }
 
@@ -81,7 +84,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.claimBatch,
 		)
 		if err != nil {
-			r.logf("voice-dispatcher claim queued voice attempts: %v", err)
+			r.warnf("event=voice_claim_error consumer=%s error=%q", r.consumer, err)
 			if err := r.wait(ctx, r.idleSleep); err != nil {
 				return err
 			}
@@ -94,6 +97,9 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		if r.infof != nil {
+			r.infof("event=voice_claim_batch consumer=%s claimed=%d", r.consumer, len(records))
+		}
 
 		for _, record := range records {
 			if err := ctx.Err(); err != nil {
@@ -103,8 +109,8 @@ func (r *Runner) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				r.logf(
-					"voice-dispatcher process attempt_id=%d message_id=%d user_id=%d: %v",
+				r.warnf(
+					"event=voice_process_error attempt_id=%d message_id=%d user_id=%d error=%q",
 					record.Attempt.ID,
 					record.MessageID,
 					record.UserID,

@@ -318,7 +318,12 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   provider VARCHAR(64) NULL,
   provider_message_id VARCHAR(255) NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'queued',
+  provider_status VARCHAR(64) NULL,
+  provider_answered_by VARCHAR(64) NULL,
+  provider_duration_seconds INT NULL,
   error_message TEXT NULL,
+  provider_payload_json JSON NULL,
+  provider_last_callback_at TIMESTAMP NULL DEFAULT NULL,
   requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   dispatch_after TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   lease_token VARCHAR(64) NULL,
@@ -336,6 +341,7 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   KEY idx_delivery_attempts_channel_status (channel, status),
   KEY idx_delivery_attempts_voice_queue (channel, status, dispatch_after, lease_expires_at),
   KEY idx_delivery_attempts_lease_token (lease_token),
+  KEY idx_delivery_attempts_provider_message_id (provider_message_id),
   CONSTRAINT fk_delivery_attempts_users_message_id
     FOREIGN KEY (users_message_id) REFERENCES users_messages (id)
     ON DELETE CASCADE,

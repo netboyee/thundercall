@@ -13,6 +13,7 @@ import (
 	"thundercall-go/internal/config"
 	"thundercall-go/internal/database"
 	"thundercall-go/internal/health"
+	"thundercall-go/internal/logging"
 	"thundercall-go/internal/queue/redisstreams"
 	accountsettingsrepo "thundercall-go/internal/repositories/accountsettings"
 	deliveryattemptsrepo "thundercall-go/internal/repositories/deliveryattempts"
@@ -32,6 +33,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	logging.Configure(cfg.LogLevel)
 
 	switch currentCommand() {
 	case "healthcheck":
@@ -53,6 +55,7 @@ func currentCommand() string {
 }
 
 func run(cfg config.Config) error {
+	logger := logging.New("worker")
 	if !cfg.MySQL.Enabled() {
 		return fmt.Errorf("THUNDERCALL_MYSQL_DSN is required for worker")
 	}
@@ -79,7 +82,7 @@ func run(cfg config.Config) error {
 	heartbeat := health.NewFileHeartbeat(cfg.Health.HeartbeatPath)
 	touchHeartbeat := func() {
 		if err := heartbeat.Touch(); err != nil {
-			log.Printf("update worker heartbeat: %v", err)
+			logger.Warnf("event=heartbeat_update_error error=%q", err)
 		}
 	}
 	touchHeartbeat()
@@ -100,7 +103,7 @@ func run(cfg config.Config) error {
 	runner := worker.NewRunner(queue, service, cfg.Worker.ReadCount, cfg.Redis.Block, 5*time.Second)
 	runner.SetHeartbeatTouch(touchHeartbeat)
 
-	log.Printf("thundercall worker is consuming redis stream %s as group %s consumer %s", cfg.Redis.StreamKey, cfg.Redis.ConsumerGroup, cfg.Redis.ConsumerName)
+	logger.Infof("event=start stream=%s group=%s consumer=%s", cfg.Redis.StreamKey, cfg.Redis.ConsumerGroup, cfg.Redis.ConsumerName)
 	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run worker: %w", err)
 	}
