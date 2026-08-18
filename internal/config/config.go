@@ -151,7 +151,7 @@ func Load() (Config, error) {
 			Password:        os.Getenv("THUNDERCALL_NWWS_PASSWORD"),
 			JoinPassword:    os.Getenv("THUNDERCALL_NWWS_JOIN_PASSWORD"),
 			Nickname:        os.Getenv("THUNDERCALL_NWWS_NICK"),
-			Products:        csvValueOrDefault("THUNDERCALL_NWWS_PRODUCTS", []string{"SVR", "FFW", "TOR", "WSW", "TSU"}),
+			Products:        csvValueOrDefault("THUNDERCALL_NWWS_PRODUCTS", []string{"SVR", "FFW", "TOR", "WSW"}),
 			LogFullMessages: boolValueOrDefault("THUNDERCALL_NWWS_LOG_FULL_MESSAGES", false),
 			IdleTimeout:     durationValueOrDefault("THUNDERCALL_NWWS_IDLE_TIMEOUT", 5*time.Minute),
 		},

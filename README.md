@@ -17,7 +17,7 @@ Implemented today:
 
 - NWWS-only ingest
 - Configurable allowed NWWS products, currently defaulting to
-  `SVR,FFW,TOR,WSW,TSU`
+  `SVR,FFW,TOR,WSW`
 - Persistence for `source_messages`, `nws_events`, `messages`,
   `notifications`, `users_messages`, `delivery_attempts`, and
   `outbox_events`
@@ -210,7 +210,7 @@ These are the env vars loaded by `internal/config`.
 | `THUNDERCALL_NWWS_PASSWORD` | none | Required for ingest runtime. |
 | `THUNDERCALL_NWWS_JOIN_PASSWORD` | same as `THUNDERCALL_NWWS_PASSWORD` | Optional separate room password. |
 | `THUNDERCALL_NWWS_NICK` | same as `THUNDERCALL_NWWS_USERNAME` | Optional MUC nick override. |
-| `THUNDERCALL_NWWS_PRODUCTS` | `SVR,FFW,TOR,WSW,TSU` | Allowed products persisted by ingest. |
+| `THUNDERCALL_NWWS_PRODUCTS` | `SVR,FFW,TOR,WSW` | Allowed products persisted by ingest. |
 | `THUNDERCALL_NWWS_LOG_FULL_MESSAGES` | `false` | When `true`, emits full NWWS bulletin text at `DEBUG` level. |
 | `THUNDERCALL_NWWS_IDLE_TIMEOUT` | `5m` | Consumer idle timeout watchdog. |
 

@@ -5,6 +5,26 @@ import (
 	"time"
 )
 
+func TestLoadNWWSProductsDefault(t *testing.T) {
+	t.Setenv("THUNDERCALL_NWWS_PRODUCTS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	want := []string{"SVR", "FFW", "TOR", "WSW"}
+	got := cfg.NWWS.Products
+	if len(got) != len(want) {
+		t.Fatalf("Load().NWWS.Products len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Load().NWWS.Products[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestNormalizedCSVValues(t *testing.T) {
 	got := normalizedCSVValues([]string{" svr ", "FFW", "tor", "FFW", "", "npw"})
 	want := []string{"SVR", "FFW", "TOR", "NPW"}
