@@ -1,6 +1,9 @@
 services:
   mysql:
     image: mysql:8.4
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
     environment:
       MYSQL_DATABASE: thundercall
       MYSQL_USER: thundercall
@@ -20,6 +23,9 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "6379:6379"
@@ -33,6 +39,9 @@ services:
     build:
       context: .
       target: api
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
     env_file:
       - .env.docker
     environment:
@@ -43,11 +52,20 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "/thundercall", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   ingest:
     build:
       context: .
       target: ingest
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
     profiles:
       - nwws
     env_file:
@@ -58,16 +76,27 @@ services:
       THUNDERCALL_REDIS_STREAM: thundercall:messages
       THUNDERCALL_REDIS_GROUP: thundercall-workers
       THUNDERCALL_REDIS_CONSUMER: ingest
+      THUNDERCALL_HEARTBEAT_PATH: /dev/shm/thundercall/ingest.heartbeat
+      THUNDERCALL_HEARTBEAT_MAX_AGE: 8m
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/thundercall", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   worker:
     build:
       context: .
       target: worker
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
     env_file:
       - .env.docker
     environment:
@@ -76,11 +105,29 @@ services:
       THUNDERCALL_REDIS_STREAM: thundercall:messages
       THUNDERCALL_REDIS_GROUP: thundercall-workers
       THUNDERCALL_REDIS_CONSUMER: worker-1
+      THUNDERCALL_HEARTBEAT_PATH: /dev/shm/thundercall/worker.heartbeat
+      THUNDERCALL_HEARTBEAT_MAX_AGE: 45s
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/thundercall", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 60
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   mysql-data:

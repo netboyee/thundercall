@@ -127,6 +127,9 @@ Notes:
   logged and marked sent without calling Twilio
 - `ingest` will exit immediately unless the NWWS credentials in `.env.docker`
   are populated
+- `api`, `ingest`, `worker`, `mysql`, and `redis` all publish Docker health
+  checks, and the compose stack includes an `autoheal` sidecar that restarts
+  any container marked `unhealthy`
 
 Create an operator login:
 
@@ -142,6 +145,8 @@ Environment variables:
 
 - `THUNDERCALL_MYSQL_DSN` enables the MySQL-backed runtime
 - `THUNDERCALL_API_LISTEN_ADDR`, `THUNDERCALL_API_SESSION_TTL`
+- `THUNDERCALL_HEARTBEAT_PATH`, `THUNDERCALL_HEARTBEAT_MAX_AGE` for the
+  heartbeat-backed Docker health checks used by `worker` and `ingest`
 - `THUNDERCALL_REDIS_ADDR`, `THUNDERCALL_REDIS_STREAM`,
   `THUNDERCALL_REDIS_GROUP`, `THUNDERCALL_REDIS_CONSUMER`
 - `THUNDERCALL_TWILIO_VOICE_LOG_ONLY` keeps worker voice delivery in log-only
@@ -162,6 +167,40 @@ Environment variables:
 - `TWILIO_SMS_FROM` or `TWILIO_MESSAGING_SERVICE_SID`
 - `TWILIO_VOICE_FROM`, `TWILIO_VOICE_URL`
 - `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `SENDGRID_FROM_NAME`
+
+## Daily MySQL Backups
+
+The repo includes a host-run backup script at
+[ops/mysql-backup.sh](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/ops/mysql-backup.sh).
+It uses `docker compose exec -T mysql mysqldump ...`, compresses the dump with
+`gzip`, and prunes old backups by retention.
+
+Default behavior:
+
+- backup directory: `./backups/mysql`
+- retention: `14` days
+- database: `thundercall`
+- mysql service name: `mysql`
+
+Run it manually:
+
+```bash
+./ops/mysql-backup.sh
+```
+
+Useful overrides:
+
+```bash
+THUNDERCALL_BACKUP_DIR=/opt/thundercall/backups/mysql \
+THUNDERCALL_BACKUP_RETENTION_DAYS=30 \
+THUNDERCALL_BACKUP_MYSQL_PASSWORD='change-me' \
+./ops/mysql-backup.sh
+```
+
+A sample cron entry lives at
+[ops/cron/thundercall-mysql-backup.cron.example](/Users/ernie/Projects/VOLO/ThunderCall/thundercall-go/ops/cron/thundercall-mysql-backup.cron.example).
+Update the script path, backup directory, and MySQL password for your host
+before installing it with `crontab`.
 
 ## MySQL Integration Tests
 

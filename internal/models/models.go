@@ -69,26 +69,24 @@ func (s *StringSlice) fromBytes(value []byte) error {
 }
 
 type Account struct {
-	ID              int64
-	LegacyCompanyID *int64
-	Name            string
-	Active          bool
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID        int64
+	Name      string
+	Active    bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type User struct {
-	ID             int64
-	AccountID      int64
-	LegacyRecordID *int64
-	ExternalID     *string
-	FirstName      *string
-	LastName       *string
-	DisplayName    *string
-	Title          *string
-	Active         bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID          int64
+	AccountID   int64
+	ExternalID  *string
+	FirstName   *string
+	LastName    *string
+	DisplayName *string
+	Title       *string
+	Active      bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type UserContactMethod struct {
@@ -104,25 +102,23 @@ type UserContactMethod struct {
 }
 
 type Location struct {
-	ID                     int64
-	AccountID              int64
-	LegacyRecordLocationID *int64
-	LegacyRecordAddressID  *int64
-	Name                   string
-	AddressLine1           *string
-	AddressLine2           *string
-	City                   *string
-	StateCode              *string
-	PostalCode             *string
-	CountyFIPS             *string
-	NWSZone                *string
-	Latitude               *float64
-	Longitude              *float64
-	CoverageWKT            *string
-	IsThunderCallEnabled   bool
-	Active                 bool
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID                   int64
+	AccountID            int64
+	Name                 string
+	AddressLine1         *string
+	AddressLine2         *string
+	City                 *string
+	StateCode            *string
+	PostalCode           *string
+	CountyFIPS           *string
+	NWSZone              *string
+	Latitude             *float64
+	Longitude            *float64
+	CoverageWKT          *string
+	IsThunderCallEnabled bool
+	Active               bool
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type UserLocation struct {
@@ -204,7 +200,6 @@ type Message struct {
 	AccountID          *int64
 	SourceMessageID    *int64
 	NWSEventID         *int64
-	LegacyMessageID    *int64
 	ExternalMessageID  *string
 	SourceSegmentIndex *int
 	Fingerprint        string

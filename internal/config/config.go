@@ -14,6 +14,7 @@ type Config struct {
 	Ingest    IngestConfig
 	Worker    WorkerConfig
 	API       APIConfig
+	Health    HealthConfig
 	Geocoding GeocodingConfig
 	Twilio    TwilioConfig
 	SendGrid  SendGridConfig
@@ -83,6 +84,11 @@ type WorkerConfig struct {
 type APIConfig struct {
 	ListenAddr string
 	SessionTTL time.Duration
+}
+
+type HealthConfig struct {
+	HeartbeatPath   string
+	HeartbeatMaxAge time.Duration
 }
 
 type GeocodingConfig struct {
@@ -159,6 +165,10 @@ func Load() (Config, error) {
 		API: APIConfig{
 			ListenAddr: valueOrDefault("THUNDERCALL_API_LISTEN_ADDR", ":8080"),
 			SessionTTL: durationValueOrDefault("THUNDERCALL_API_SESSION_TTL", 24*time.Hour),
+		},
+		Health: HealthConfig{
+			HeartbeatPath:   os.Getenv("THUNDERCALL_HEARTBEAT_PATH"),
+			HeartbeatMaxAge: durationValueOrDefault("THUNDERCALL_HEARTBEAT_MAX_AGE", time.Minute),
 		},
 		Geocoding: GeocodingConfig{
 			CensusBaseURL:     valueOrDefault("THUNDERCALL_CENSUS_BASE_URL", "https://geocoding.geo.census.gov/geocoder"),

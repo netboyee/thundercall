@@ -6,19 +6,16 @@ USE thundercall;
 
 CREATE TABLE IF NOT EXISTS accounts (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  legacy_company_id BIGINT NULL,
   name VARCHAR(255) NOT NULL,
   active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_accounts_legacy_company_id (legacy_company_id)
+  PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   account_id BIGINT UNSIGNED NOT NULL,
-  legacy_record_id BIGINT NULL,
   external_id VARCHAR(128) NULL,
   first_name VARCHAR(120) NULL,
   last_name VARCHAR(120) NULL,
@@ -28,7 +25,6 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_users_legacy_record_id (legacy_record_id),
   KEY idx_users_account_id (account_id),
   CONSTRAINT fk_users_account_id
     FOREIGN KEY (account_id) REFERENCES accounts (id)
@@ -56,8 +52,6 @@ CREATE TABLE IF NOT EXISTS user_contact_methods (
 CREATE TABLE IF NOT EXISTS locations (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   account_id BIGINT UNSIGNED NOT NULL,
-  legacy_record_location_id BIGINT NULL,
-  legacy_record_address_id BIGINT NULL,
   name VARCHAR(255) NOT NULL,
   address_line_1 VARCHAR(255) NULL,
   address_line_2 VARCHAR(255) NULL,
@@ -214,7 +208,6 @@ CREATE TABLE IF NOT EXISTS messages (
   account_id BIGINT UNSIGNED NULL,
   source_message_id BIGINT UNSIGNED NULL,
   nws_event_id BIGINT UNSIGNED NULL,
-  legacy_message_id BIGINT NULL,
   external_message_id VARCHAR(128) NULL,
   source_segment_index INT NULL,
   fingerprint CHAR(64) NOT NULL,

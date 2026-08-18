@@ -780,7 +780,6 @@ Request body:
 Notes:
 
 - `accountId` is the new ThunderCall account id for the station receiving signups
-- `companyId` is still accepted as a fallback for older clients, but new forms should send `accountId`
 
 Warning type mapping:
 

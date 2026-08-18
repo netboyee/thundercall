@@ -77,6 +77,33 @@ func TestRunnerProcessMessagesLeavesTransientFailuresPending(t *testing.T) {
 	}
 }
 
+func TestRunnerTouchesHeartbeatWhileProcessingMessages(t *testing.T) {
+	t.Parallel()
+
+	queue := &fakeQueue{}
+	processor := &fakeProcessor{}
+	runner := NewRunner(queue, processor, 25, 0, 0)
+	runner.logf = func(string, ...any) {}
+
+	touches := 0
+	runner.SetHeartbeatTouch(func() {
+		touches++
+	})
+
+	payload, err := events.EncodeMessageAccepted(77)
+	if err != nil {
+		t.Fatalf("EncodeMessageAccepted() error = %v", err)
+	}
+
+	runner.processMessages(context.Background(), []redisstreams.StreamMessage{
+		{ID: "20-0", EventType: events.EventTypeMessageAccepted, Payload: payload},
+	})
+
+	if touches == 0 {
+		t.Fatal("expected heartbeat touch during message processing")
+	}
+}
+
 type fakeQueue struct {
 	acked []string
 }

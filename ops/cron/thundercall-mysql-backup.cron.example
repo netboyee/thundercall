@@ -1,0 +1,12 @@
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# Update these values for your production host before installing:
+THUNDERCALL_BACKUP_DIR=/opt/thundercall/backups/mysql
+THUNDERCALL_BACKUP_RETENTION_DAYS=14
+THUNDERCALL_BACKUP_MYSQL_DATABASE=thundercall
+THUNDERCALL_BACKUP_MYSQL_USER=thundercall
+THUNDERCALL_BACKUP_MYSQL_PASSWORD=thundercall
+
+# Daily backup at 2:15 AM UTC.
+15 2 * * * /opt/thundercall/thundercall-go/ops/mysql-backup.sh >> /var/log/thundercall-mysql-backup.log 2>&1

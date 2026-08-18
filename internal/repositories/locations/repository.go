@@ -34,14 +34,12 @@ func (r *Repository) Create(ctx context.Context, location *models.Location) erro
 		result, err = r.db.ExecContext(
 			ctx,
 			`INSERT INTO locations (
-				account_id, legacy_record_location_id, legacy_record_address_id, name,
+				account_id, name,
 				address_line_1, address_line_2, city, state_code, postal_code,
 				county_fips, nws_zone, latitude, longitude, coverage_geometry,
 				is_thundercall_enabled, active
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromText(?, 4326), ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromText(?, 4326), ?, ?)`,
 			location.AccountID,
-			sqlutil.Int64Value(location.LegacyRecordLocationID),
-			sqlutil.Int64Value(location.LegacyRecordAddressID),
 			location.Name,
 			sqlutil.StringValue(location.AddressLine1),
 			sqlutil.StringValue(location.AddressLine2),
@@ -60,14 +58,12 @@ func (r *Repository) Create(ctx context.Context, location *models.Location) erro
 		result, err = r.db.ExecContext(
 			ctx,
 			`INSERT INTO locations (
-				account_id, legacy_record_location_id, legacy_record_address_id, name,
+				account_id, name,
 				address_line_1, address_line_2, city, state_code, postal_code,
 				county_fips, nws_zone, latitude, longitude, coverage_geometry,
 				is_thundercall_enabled, active
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 			location.AccountID,
-			sqlutil.Int64Value(location.LegacyRecordLocationID),
-			sqlutil.Int64Value(location.LegacyRecordAddressID),
 			location.Name,
 			sqlutil.StringValue(location.AddressLine1),
 			sqlutil.StringValue(location.AddressLine2),
@@ -208,8 +204,6 @@ func selectLocationSQL() string {
 		SELECT
 			id,
 			account_id,
-			legacy_record_location_id,
-			legacy_record_address_id,
 			name,
 			address_line_1,
 			address_line_2,
@@ -230,26 +224,22 @@ func selectLocationSQL() string {
 
 func scanLocation(s scanner) (*models.Location, error) {
 	var (
-		location               models.Location
-		legacyRecordLocationID sql.NullInt64
-		legacyRecordAddressID  sql.NullInt64
-		addressLine1           sql.NullString
-		addressLine2           sql.NullString
-		city                   sql.NullString
-		stateCode              sql.NullString
-		postalCode             sql.NullString
-		countyFIPS             sql.NullString
-		nwsZone                sql.NullString
-		latitude               sql.NullFloat64
-		longitude              sql.NullFloat64
-		coverageWKT            sql.NullString
+		location     models.Location
+		addressLine1 sql.NullString
+		addressLine2 sql.NullString
+		city         sql.NullString
+		stateCode    sql.NullString
+		postalCode   sql.NullString
+		countyFIPS   sql.NullString
+		nwsZone      sql.NullString
+		latitude     sql.NullFloat64
+		longitude    sql.NullFloat64
+		coverageWKT  sql.NullString
 	)
 
 	err := s.Scan(
 		&location.ID,
 		&location.AccountID,
-		&legacyRecordLocationID,
-		&legacyRecordAddressID,
 		&location.Name,
 		&addressLine1,
 		&addressLine2,
@@ -273,8 +263,6 @@ func scanLocation(s scanner) (*models.Location, error) {
 		return nil, err
 	}
 
-	location.LegacyRecordLocationID = sqlutil.Int64Ptr(legacyRecordLocationID)
-	location.LegacyRecordAddressID = sqlutil.Int64Ptr(legacyRecordAddressID)
 	location.AddressLine1 = sqlutil.StringPtr(addressLine1)
 	location.AddressLine2 = sqlutil.StringPtr(addressLine2)
 	location.City = sqlutil.StringPtr(city)

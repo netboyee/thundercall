@@ -4,7 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -29,6 +31,10 @@ func main() {
 	case "create-user":
 		if err := runCreateUser(cfg, os.Args[2:]); err != nil {
 			log.Fatalf("create user: %v", err)
+		}
+	case "healthcheck":
+		if err := runHealthcheck(cfg); err != nil {
+			log.Fatalf("api healthcheck: %v", err)
 		}
 	default:
 		if err := runServer(cfg); err != nil {
@@ -63,6 +69,51 @@ func runServer(cfg config.Config) error {
 
 	log.Printf("thundercall api listening on %s", cfg.API.ListenAddr)
 	return server.ListenAndServe()
+}
+
+func runHealthcheck(cfg config.Config) error {
+	url, err := apiHealthzURL(cfg.API.ListenAddr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build /healthz request: %w", err)
+	}
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("call %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("unexpected /healthz status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	return nil
+}
+
+func apiHealthzURL(listenAddr string) (string, error) {
+	addr := strings.TrimSpace(listenAddr)
+	if addr == "" {
+		addr = ":8080"
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("parse THUNDERCALL_API_LISTEN_ADDR %q: %w", listenAddr, err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+
+	return "http://" + net.JoinHostPort(host, port) + "/healthz", nil
 }
 
 func runCreateUser(cfg config.Config, args []string) error {

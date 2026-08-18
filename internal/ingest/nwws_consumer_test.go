@@ -6,6 +6,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"thundercall-go/internal/config"
+	"thundercall-go/internal/nwws"
 )
 
 func TestSelectEnvelopePayload(t *testing.T) {
@@ -146,6 +149,22 @@ func TestCloseIOAsyncReturnsWithoutWaitingForClose(t *testing.T) {
 	}
 
 	close(closer.release)
+}
+
+func TestNWWSConsumerHeartbeatTouch(t *testing.T) {
+	t.Parallel()
+
+	consumer := NewNWWSConsumer(config.NWWSConfig{}, func(context.Context, nwws.StanzaEnvelope) error { return nil })
+	touches := 0
+	consumer.SetHeartbeatTouch(func() {
+		touches++
+	})
+
+	consumer.markHealthy()
+
+	if touches != 1 {
+		t.Fatalf("expected 1 heartbeat touch, got %d", touches)
+	}
 }
 
 type blockingCloser struct {

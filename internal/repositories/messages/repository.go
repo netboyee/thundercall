@@ -26,15 +26,14 @@ func (r *Repository) Create(ctx context.Context, message *models.Message) error 
 	result, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO messages (
-			account_id, source_message_id, nws_event_id, legacy_message_id, external_message_id, source_segment_index,
+			account_id, source_message_id, nws_event_id, external_message_id, source_segment_index,
 			fingerprint, source, event_code, message_type,
 			alert_type_code, title, body, coordinate, polygon_wkt, fips_codes_json,
 			nws_zones_json, primary_vtec_raw, vtec_action, original_payload, status, issued_at, received_at, processed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sqlutil.Int64Value(message.AccountID),
 		sqlutil.Int64Value(message.SourceMessageID),
 		sqlutil.Int64Value(message.NWSEventID),
-		sqlutil.Int64Value(message.LegacyMessageID),
 		sqlutil.StringValue(message.ExternalMessageID),
 		sqlutil.IntValue(message.SourceSegmentIndex),
 		message.Fingerprint,
@@ -97,7 +96,6 @@ func selectMessageSQL() string {
 			account_id,
 			source_message_id,
 			nws_event_id,
-			legacy_message_id,
 			external_message_id,
 			source_segment_index,
 			fingerprint,
@@ -129,7 +127,6 @@ func scanMessage(s scanner) (*models.Message, error) {
 		accountID          sql.NullInt64
 		sourceMessageID    sql.NullInt64
 		nwsEventID         sql.NullInt64
-		legacyMessageID    sql.NullInt64
 		externalMessageID  sql.NullString
 		sourceSegmentIndex sql.NullInt64
 		title              sql.NullString
@@ -147,7 +144,6 @@ func scanMessage(s scanner) (*models.Message, error) {
 		&accountID,
 		&sourceMessageID,
 		&nwsEventID,
-		&legacyMessageID,
 		&externalMessageID,
 		&sourceSegmentIndex,
 		&message.Fingerprint,
@@ -181,7 +177,6 @@ func scanMessage(s scanner) (*models.Message, error) {
 	message.AccountID = sqlutil.Int64Ptr(accountID)
 	message.SourceMessageID = sqlutil.Int64Ptr(sourceMessageID)
 	message.NWSEventID = sqlutil.Int64Ptr(nwsEventID)
-	message.LegacyMessageID = sqlutil.Int64Ptr(legacyMessageID)
 	message.ExternalMessageID = sqlutil.StringPtr(externalMessageID)
 	message.SourceSegmentIndex = sqlutil.IntPtr[int](sourceSegmentIndex)
 	message.Title = sqlutil.StringPtr(title)

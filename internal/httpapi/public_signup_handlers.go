@@ -40,7 +40,6 @@ var legacyPublicSignupSupportedMessageTypes = []string{
 type legacyPublicSignupRequest struct {
 	ExternalID  string                      `json:"externalId"`
 	AccountID   int64                       `json:"accountId"`
-	CompanyID   int64                       `json:"companyId"`
 	FirstName   string                      `json:"firstName"`
 	LastName    string                      `json:"lastName"`
 	DisplayName string                      `json:"displayName"`
@@ -114,7 +113,7 @@ func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 		writePublicSignupError(w, http.StatusBadRequest, "Invalid JSON body.")
 		return
 	}
-	if request.AccountID <= 0 && request.CompanyID <= 0 {
+	if request.AccountID <= 0 {
 		writePublicSignupError(w, http.StatusBadRequest, "Account ID required")
 		return
 	}
@@ -125,7 +124,7 @@ func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account, err := s.resolvePublicSignupAccount(r.Context(), request.AccountID, request.CompanyID)
+	account, err := s.resolvePublicSignupAccount(r.Context(), request.AccountID)
 	if err != nil {
 		writePublicSignupError(w, http.StatusInternalServerError, "Failed to resolve account.")
 		return
@@ -173,7 +172,7 @@ func (s *Server) handlePublicSignupOptions(w http.ResponseWriter, _ *http.Reques
 func writePublicSignupCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-ApiCompanyId")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type")
 	w.Header().Set("Access-Control-Max-Age", "86400")
 }
 
@@ -324,31 +323,10 @@ func legacyVoiceSettingsFromWarningTypes(warningTypes []int) (map[string]bool, e
 	return settings, nil
 }
 
-func (s *Server) resolvePublicSignupAccount(ctx context.Context, accountID int64, companyID int64) (*models.Account, error) {
-	if accountID > 0 {
-		account, err := s.accounts.GetByID(ctx, accountID)
-		if err != nil {
-			return nil, err
-		}
-		if account == nil || !account.Active {
-			return nil, nil
-		}
-		return account, nil
-	}
-
-	if companyID <= 0 {
-		return nil, nil
-	}
-
-	account, err := s.accounts.GetByLegacyCompanyID(ctx, companyID)
+func (s *Server) resolvePublicSignupAccount(ctx context.Context, accountID int64) (*models.Account, error) {
+	account, err := s.accounts.GetByID(ctx, accountID)
 	if err != nil {
 		return nil, err
-	}
-	if account == nil {
-		account, err = s.accounts.GetByID(ctx, companyID)
-		if err != nil {
-			return nil, err
-		}
 	}
 	if account == nil || !account.Active {
 		return nil, nil

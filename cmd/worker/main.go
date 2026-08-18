@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 
 	"thundercall-go/internal/config"
 	"thundercall-go/internal/database"
+	"thundercall-go/internal/health"
 	sendgridprovider "thundercall-go/internal/providers/sendgrid"
 	twilioprovider "thundercall-go/internal/providers/twilio"
 	"thundercall-go/internal/queue/redisstreams"
@@ -32,11 +34,32 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+
+	switch currentCommand() {
+	case "healthcheck":
+		if err := runHealthcheck(cfg); err != nil {
+			log.Fatalf("worker healthcheck: %v", err)
+		}
+	default:
+		if err := run(cfg); err != nil {
+			log.Fatalf("run worker: %v", err)
+		}
+	}
+}
+
+func currentCommand() string {
+	if len(os.Args) >= 2 && os.Args[1] == "healthcheck" {
+		return "healthcheck"
+	}
+	return "serve"
+}
+
+func run(cfg config.Config) error {
 	if !cfg.MySQL.Enabled() {
-		log.Fatal("THUNDERCALL_MYSQL_DSN is required for worker")
+		return fmt.Errorf("THUNDERCALL_MYSQL_DSN is required for worker")
 	}
 	if !cfg.Redis.Enabled() {
-		log.Fatal("redis configuration is required for worker")
+		return fmt.Errorf("redis configuration is required for worker")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -44,7 +67,7 @@ func main() {
 
 	db, err := database.OpenMySQL(ctx, cfg.MySQL)
 	if err != nil {
-		log.Fatalf("open mysql: %v", err)
+		return fmt.Errorf("open mysql: %w", err)
 	}
 	defer db.Close()
 
@@ -52,8 +75,16 @@ func main() {
 	defer queue.Close()
 
 	if err := queue.Ping(ctx); err != nil {
-		log.Fatalf("ping redis: %v", err)
+		return fmt.Errorf("ping redis: %w", err)
 	}
+
+	heartbeat := health.NewFileHeartbeat(cfg.Health.HeartbeatPath)
+	touchHeartbeat := func() {
+		if err := heartbeat.Touch(); err != nil {
+			log.Printf("update worker heartbeat: %v", err)
+		}
+	}
+	touchHeartbeat()
 
 	resolver := thundercall.NewSQLRecipientResolver(
 		locationsrepo.New(db),
@@ -71,9 +102,27 @@ func main() {
 	)
 	service := worker.NewService(messagesrepo.New(db), resolver, dispatcher)
 	runner := worker.NewRunner(queue, service, cfg.Worker.ReadCount, cfg.Redis.Block, 5*time.Second)
+	runner.SetHeartbeatTouch(touchHeartbeat)
 
 	log.Printf("thundercall worker is consuming redis stream %s as group %s consumer %s", cfg.Redis.StreamKey, cfg.Redis.ConsumerGroup, cfg.Redis.ConsumerName)
 	if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("run worker: %v", err)
+		return fmt.Errorf("run worker: %w", err)
 	}
+	return nil
+}
+
+func runHealthcheck(cfg config.Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := health.CheckMySQL(ctx, cfg.MySQL); err != nil {
+		return err
+	}
+	if err := health.CheckRedis(ctx, cfg.Redis); err != nil {
+		return err
+	}
+	if err := health.CheckHeartbeat(cfg.Health); err != nil {
+		return err
+	}
+	return nil
 }

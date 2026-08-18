@@ -29,6 +29,7 @@ type Runner struct {
 	block      time.Duration
 	retryDelay time.Duration
 	logf       func(string, ...any)
+	touch      func()
 }
 
 func NewRunner(queue queueClient, service messageProcessor, readCount int64, block time.Duration, retryDelay time.Duration) *Runner {
@@ -49,6 +50,10 @@ func NewRunner(queue queueClient, service messageProcessor, readCount int64, blo
 	}
 }
 
+func (r *Runner) SetHeartbeatTouch(fn func()) {
+	r.touch = fn
+}
+
 func (r *Runner) Run(ctx context.Context) error {
 	if r.queue == nil {
 		return fmt.Errorf("redis queue client is required")
@@ -58,6 +63,8 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	for {
+		r.markHealthy()
+
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -69,6 +76,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		r.markHealthy()
 
 		claimed, _, err := r.queue.AutoClaim(ctx, "0-0", r.readCount)
 		if err != nil {
@@ -78,6 +86,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		r.markHealthy()
 		r.processMessages(ctx, claimed)
 
 		messages, err := r.queue.ReadGroup(ctx, r.readCount, r.block)
@@ -91,6 +100,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		r.markHealthy()
 		r.processMessages(ctx, messages)
 	}
 }
@@ -119,11 +129,18 @@ func (r *Runner) processMessages(ctx context.Context, messages []redisstreams.St
 				r.logf("worker leaving stream message %s pending for retry after processing error: %v", message.ID, err)
 				continue
 			}
+			r.markHealthy()
 			r.ackBestEffort(ctx, message.ID, "processed message")
 		default:
 			r.logf("worker dropping unsupported stream event %q (%s)", message.EventType, message.ID)
 			r.ackBestEffort(ctx, message.ID, "unsupported stream event")
 		}
+	}
+}
+
+func (r *Runner) markHealthy() {
+	if r.touch != nil {
+		r.touch()
 	}
 }
 

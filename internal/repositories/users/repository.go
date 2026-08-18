@@ -25,10 +25,9 @@ func NewWithDBTX(db sqlutil.DBTX) *Repository {
 func (r *Repository) Create(ctx context.Context, user *models.User) error {
 	result, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO users (account_id, legacy_record_id, external_id, first_name, last_name, display_name, title, active)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (account_id, external_id, first_name, last_name, display_name, title, active)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		user.AccountID,
-		sqlutil.Int64Value(user.LegacyRecordID),
 		sqlutil.StringValue(user.ExternalID),
 		sqlutil.StringValue(user.FirstName),
 		sqlutil.StringValue(user.LastName),
@@ -50,7 +49,7 @@ func (r *Repository) Create(ctx context.Context, user *models.User) error {
 
 func (r *Repository) GetByID(ctx context.Context, id int64) (*models.User, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, account_id, legacy_record_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at
+		SELECT id, account_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at
 		FROM users
 		WHERE id = ?`,
 		id,
@@ -60,7 +59,7 @@ func (r *Repository) GetByID(ctx context.Context, id int64) (*models.User, error
 
 func (r *Repository) ListByAccountID(ctx context.Context, accountID int64) ([]models.User, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, legacy_record_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at
+		SELECT id, account_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at
 		FROM users
 		WHERE account_id = ?
 		ORDER BY id`,
@@ -94,7 +93,7 @@ func (r *Repository) ListByIDs(ctx context.Context, ids []int64) ([]models.User,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, account_id, legacy_record_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at
+		SELECT id, account_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at
 		FROM users
 		WHERE id IN (%s)
 		ORDER BY id`, sqlutil.Placeholders(len(ids)))
@@ -123,19 +122,17 @@ type scanner interface {
 
 func scanUser(s scanner) (*models.User, error) {
 	var (
-		user           models.User
-		legacyRecordID sql.NullInt64
-		externalID     sql.NullString
-		firstName      sql.NullString
-		lastName       sql.NullString
-		displayName    sql.NullString
-		title          sql.NullString
+		user        models.User
+		externalID  sql.NullString
+		firstName   sql.NullString
+		lastName    sql.NullString
+		displayName sql.NullString
+		title       sql.NullString
 	)
 
 	err := s.Scan(
 		&user.ID,
 		&user.AccountID,
-		&legacyRecordID,
 		&externalID,
 		&firstName,
 		&lastName,
@@ -152,7 +149,6 @@ func scanUser(s scanner) (*models.User, error) {
 		return nil, err
 	}
 
-	user.LegacyRecordID = sqlutil.Int64Ptr(legacyRecordID)
 	user.ExternalID = sqlutil.StringPtr(externalID)
 	user.FirstName = sqlutil.StringPtr(firstName)
 	user.LastName = sqlutil.StringPtr(lastName)

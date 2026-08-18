@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -30,10 +31,11 @@ type Server struct {
 	resolver       geocode.Resolver
 	sessionTTL     time.Duration
 	now            func() time.Time
+	pingDB         func(context.Context) error
 }
 
 func NewServer(db *sql.DB, sessionTTL time.Duration, resolver geocode.Resolver) *Server {
-	return &Server{
+	server := &Server{
 		db:             db,
 		accounts:       accountsrepo.New(db),
 		apiUsers:       apiusersrepo.New(db),
@@ -46,6 +48,10 @@ func NewServer(db *sql.DB, sessionTTL time.Duration, resolver geocode.Resolver) 
 		sessionTTL:     sessionTTL,
 		now:            func() time.Time { return time.Now().UTC() },
 	}
+	if db != nil {
+		server.pingDB = db.PingContext
+	}
+	return server
 }
 
 func (s *Server) Handler() http.Handler {
@@ -72,7 +78,20 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if s.pingDB != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		if err := s.pingDB(ctx); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"ok":    false,
+				"error": "mysql unavailable",
+			})
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
 	})

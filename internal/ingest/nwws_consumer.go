@@ -30,6 +30,7 @@ type NWWSConsumer struct {
 	reconnectDelay time.Duration
 	logf           func(string, ...any)
 	run            func(context.Context) error
+	touch          func()
 }
 
 func NewNWWSConsumer(cfg config.NWWSConfig, handler func(context.Context, nwws.StanzaEnvelope) error) *NWWSConsumer {
@@ -41,6 +42,10 @@ func NewNWWSConsumer(cfg config.NWWSConfig, handler func(context.Context, nwws.S
 	}
 	consumer.run = consumer.runSession
 	return consumer
+}
+
+func (c *NWWSConsumer) SetHeartbeatTouch(fn func()) {
+	c.touch = fn
 }
 
 func (c *NWWSConsumer) Run(ctx context.Context) error {
@@ -106,6 +111,7 @@ func (c *NWWSConsumer) runSession(ctx context.Context) error {
 		stanza.NSClient,
 		muc.HandleClient(mucClient),
 		mux.MessageFunc(stanza.GroupChatMessage, xml.Name{}, func(_ stanza.Message, r xmlstream.TokenReadEncoder) error {
+			c.markHealthy()
 			if c.cfg.IdleTimeout > 0 {
 				select {
 				case activity <- struct{}{}:
@@ -150,6 +156,7 @@ func (c *NWWSConsumer) runSession(ctx context.Context) error {
 	}
 	var channelCleanup sync.Once
 	defer leaveNWWSChannelAsync(&channelCleanup, channel, c.logf)
+	c.markHealthy()
 	c.logf("joined NWWS room %s as %s", roomJID.Bare().String(), roomJID.Resourcepart())
 
 	var idleErr <-chan error
@@ -167,6 +174,12 @@ func (c *NWWSConsumer) runSession(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (c *NWWSConsumer) markHealthy() {
+	if c.touch != nil {
+		c.touch()
 	}
 }
 

@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -121,7 +124,39 @@ func TestHealthzHandler(t *testing.T) {
 	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("expected application/json content type, got %q", got)
 	}
-	if body := recorder.Body.String(); body != "{\"ok\":true}\n" {
-		t.Fatalf("unexpected healthz body: %q", body)
+
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if ok, _ := body["ok"].(bool); !ok {
+		t.Fatalf("expected ok=true body, got %v", body)
+	}
+}
+
+func TestHealthzHandlerReturnsServiceUnavailableWhenDBPingFails(t *testing.T) {
+	server := NewServer(nil, time.Hour, nil)
+	server.pingDB = func(context.Context) error {
+		return errors.New("mysql down")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 response, got %d", recorder.Code)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if ok, _ := body["ok"].(bool); ok {
+		t.Fatalf("expected ok=false body, got %v", body)
+	}
+	if got, _ := body["error"].(string); got != "mysql unavailable" {
+		t.Fatalf("expected mysql unavailable error, got %q", got)
 	}
 }
