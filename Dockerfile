@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 
+ARG BUILDPLATFORM
 FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS deps
 WORKDIR /src
 

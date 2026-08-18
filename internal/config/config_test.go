@@ -96,6 +96,30 @@ func TestLoadTwilioVoiceURLHonorsEnv(t *testing.T) {
 	}
 }
 
+func TestLoadTwilioVoiceStatusCallbackDefaultsToThunderCallAPI(t *testing.T) {
+	t.Setenv("TWILIO_VOICE_STATUS_CALLBACK", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Twilio.VoiceStatusCallback != "https://api.thundercall.com/api/providers/twilio/voice/status" {
+		t.Fatalf("Load().Twilio.VoiceStatusCallback = %q, want default ThunderCall callback URL", cfg.Twilio.VoiceStatusCallback)
+	}
+}
+
+func TestLoadTwilioVoiceStatusCallbackHonorsEnv(t *testing.T) {
+	t.Setenv("TWILIO_VOICE_STATUS_CALLBACK", "https://example.com/twilio/callback")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Twilio.VoiceStatusCallback != "https://example.com/twilio/callback" {
+		t.Fatalf("Load().Twilio.VoiceStatusCallback = %q, want override callback URL", cfg.Twilio.VoiceStatusCallback)
+	}
+}
+
 func TestLoadTwilioVoiceOverrideSingleCallDefaultsTrue(t *testing.T) {
 	t.Setenv("THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL", "")
 

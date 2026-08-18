@@ -40,7 +40,7 @@ exports.handler = async (context, event, callback) => { // Made the handler func
   // --- End Phone Number Preprocessing Logic ---
 
   const functionPath = 'https://thundercall-2287.twil.io/ThunderCallIVR'; // <<<=== REMEMBER TO UPDATE THIS ===>>>
-  const API_BASE_URL = 'https://api.voloos.com/'; // Base URL for your API endpoints
+  const API_BASE_URL = 'https://api.thundercall.com/'; // Base URL for your API endpoints
 
   // Define the URLs for your audio assets
   const greetingAudioUrl = 'https://thundercall-2287.twil.io/TCallGreeting.mp3';
@@ -306,4 +306,3 @@ case '3':
   console.log("Returning TwiML response.");
   return callback(null, twiml);
 };
-

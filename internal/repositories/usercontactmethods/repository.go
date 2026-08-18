@@ -3,6 +3,7 @@ package usercontactmethods
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"thundercall-go/internal/models"
@@ -43,6 +44,69 @@ func (r *Repository) Create(ctx context.Context, method *models.UserContactMetho
 	}
 	method.ID = id
 	return nil
+}
+
+func (r *Repository) Upsert(ctx context.Context, method *models.UserContactMethod) error {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id
+		 FROM user_contact_methods
+		 WHERE user_id = ? AND channel = ? AND destination = ?
+		 LIMIT 1`,
+		method.UserID,
+		string(method.Channel),
+		method.Destination,
+	)
+
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return r.Create(ctx, method)
+		}
+		return err
+	}
+
+	method.ID = id
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE user_contact_methods
+		 SET is_primary = ?, is_verified = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		method.IsPrimary,
+		method.IsVerified,
+		method.Active,
+		method.ID,
+	)
+	return err
+}
+
+func (r *Repository) FindActiveUserIDByAccountAndChannelDestination(ctx context.Context, accountID int64, channel models.Channel, destination string) (int64, error) {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT u.id
+		 FROM user_contact_methods ucm
+		 INNER JOIN users u
+		   ON u.id = ucm.user_id
+		 WHERE u.account_id = ?
+		   AND u.active = 1
+		   AND ucm.active = 1
+		   AND ucm.channel = ?
+		   AND ucm.destination = ?
+		 ORDER BY u.id
+		 LIMIT 1`,
+		accountID,
+		string(channel),
+		destination,
+	)
+
+	var userID int64
+	if err := row.Scan(&userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return userID, nil
 }
 
 func (r *Repository) ListByUserID(ctx context.Context, userID int64) ([]models.UserContactMethod, error) {

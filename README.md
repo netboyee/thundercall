@@ -160,6 +160,53 @@ docker build --target worker -t thundercall-worker .
 docker build --target voice-dispatcher -t thundercall-voice-dispatcher .
 ```
 
+### AMD64 Linux Builds
+
+The four custom Go service images are built as static Linux binaries and the
+Dockerfile is cross-platform aware:
+
+- builder stage runs on the native build machine via `$BUILDPLATFORM`
+- Go binaries are compiled for the requested target via `TARGETOS` and
+  `TARGETARCH`
+- final runtime image inherits the requested target platform automatically
+
+That means:
+
+- `docker compose up --build` on an Apple Silicon Mac builds local `arm64`
+  images for local development
+- the same repo can build deployable `linux/amd64` images for an x86_64 Linux
+  server
+- the bundled `mysql:8.4`, `redis:7.4-alpine`, and `willfarrell/autoheal`
+  images are official multi-arch images and also run on `linux/amd64`
+
+To build all four custom service images for an amd64 Linux host from this Mac:
+
+```bash
+./ops/build-linux-amd64-images.sh
+```
+
+That script uses Docker Buildx and produces:
+
+- `thundercall-api:amd64`
+- `thundercall-ingest:amd64`
+- `thundercall-worker:amd64`
+- `thundercall-voice-dispatcher:amd64`
+
+You can also build an individual target directly:
+
+```bash
+docker buildx build --platform linux/amd64 --target api --tag thundercall-api:amd64 --load .
+docker buildx build --platform linux/amd64 --target ingest --tag thundercall-ingest:amd64 --load .
+docker buildx build --platform linux/amd64 --target worker --tag thundercall-worker:amd64 --load .
+docker buildx build --platform linux/amd64 --target voice-dispatcher --tag thundercall-voice-dispatcher:amd64 --load .
+```
+
+To verify the resulting image architecture:
+
+```bash
+docker image inspect thundercall-api:amd64 --format '{{.Architecture}}/{{.Os}}'
+```
+
 Local Docker defaults:
 
 - API: `http://localhost:8080`
@@ -273,7 +320,7 @@ These are the env vars loaded by `internal/config`.
 | `TWILIO_SMS_FROM` | empty | Reserved for future SMS support. |
 | `TWILIO_VOICE_FROM` | empty | Required for live voice calls. |
 | `TWILIO_VOICE_URL` | empty | Optional hosted Twilio Function base URL. |
-| `TWILIO_VOICE_STATUS_CALLBACK` | empty | Optional Twilio status callback URL. |
+| `TWILIO_VOICE_STATUS_CALLBACK` | `https://api.thundercall.com/api/providers/twilio/voice/status` | Twilio voice status callback URL. |
 | `THUNDERCALL_TWILIO_VOICE_TO_OVERRIDE` | empty | Force all test calls to one destination. |
 | `THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL` | `true` | Collapse override mode to one real call per message/event channel window. |
 | `THUNDERCALL_TWILIO_VOICE_LOG_ONLY` | `true` | Dry-run voice mode. No real Twilio call is placed. |

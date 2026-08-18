@@ -195,7 +195,7 @@ func Load() (Config, error) {
 			VoiceURL:                os.Getenv("TWILIO_VOICE_URL"),
 			VoiceToOverride:         os.Getenv("THUNDERCALL_TWILIO_VOICE_TO_OVERRIDE"),
 			VoiceOverrideSingleCall: boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_OVERRIDE_SINGLE_CALL", true),
-			VoiceStatusCallback:     os.Getenv("TWILIO_VOICE_STATUS_CALLBACK"),
+			VoiceStatusCallback:     valueOrDefault("TWILIO_VOICE_STATUS_CALLBACK", "https://api.thundercall.com/api/providers/twilio/voice/status"),
 			VoiceLogOnly:            boolValueOrDefault("THUNDERCALL_TWILIO_VOICE_LOG_ONLY", true),
 		},
 		LogLevel: valueOrDefault("THUNDERCALL_LOG_LEVEL", "info"),

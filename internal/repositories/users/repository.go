@@ -47,6 +47,22 @@ func (r *Repository) Create(ctx context.Context, user *models.User) error {
 	return nil
 }
 
+func (r *Repository) Update(ctx context.Context, user *models.User) error {
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE users
+		 SET first_name = ?, last_name = ?, display_name = ?, title = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		sqlutil.StringValue(user.FirstName),
+		sqlutil.StringValue(user.LastName),
+		sqlutil.StringValue(user.DisplayName),
+		sqlutil.StringValue(user.Title),
+		user.Active,
+		user.ID,
+	)
+	return err
+}
+
 func (r *Repository) GetByID(ctx context.Context, id int64) (*models.User, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, account_id, external_id, first_name, last_name, display_name, title, active, created_at, updated_at

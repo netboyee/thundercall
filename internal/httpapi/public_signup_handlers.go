@@ -367,45 +367,10 @@ func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID i
 			strings.TrimSpace(input.LastName),
 		}, " "))
 	}
+	canonicalAddress := canonicalSignupAddress(input.Address, resolved)
 
-	user := &models.User{
-		AccountID:   accountID,
-		ExternalID:  nullableTrimmedString(input.ExternalID),
-		FirstName:   nullableTrimmedString(input.FirstName),
-		LastName:    nullableTrimmedString(input.LastName),
-		DisplayName: nullableTrimmedString(displayName),
-		Title:       nullableTrimmedString(input.Title),
-		Active:      true,
-	}
-	if err := users.Create(ctx, user); err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	coverageWKT := geocode.PointWKT(resolved.Latitude, resolved.Longitude)
-	locationName := strings.TrimSpace(input.LocationName)
-	if locationName == "" {
-		locationName = defaultLocationName(user, input.Address)
-	}
-
-	latitude := resolved.Latitude
-	longitude := resolved.Longitude
-	location := &models.Location{
-		AccountID:            accountID,
-		Name:                 locationName,
-		AddressLine1:         nullableTrimmedString(input.Address.Line1),
-		AddressLine2:         nullableTrimmedString(input.Address.Line2),
-		City:                 nullableTrimmedString(input.Address.City),
-		StateCode:            nullableTrimmedString(strings.ToUpper(input.Address.StateCode)),
-		PostalCode:           nullableTrimmedString(input.Address.PostalCode),
-		CountyFIPS:           nullableTrimmedString(resolved.CountyFIPS),
-		NWSZone:              nullableTrimmedString(resolved.NWSZone),
-		Latitude:             &latitude,
-		Longitude:            &longitude,
-		CoverageWKT:          &coverageWKT,
-		IsThunderCallEnabled: true,
-		Active:               true,
-	}
-	if err := locations.Create(ctx, location); err != nil {
+	user, err := findOrCreateSignupUser(ctx, users, contactMethods, accountID, input, displayName)
+	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 
@@ -413,7 +378,35 @@ func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID i
 	if subscriptionType == "" {
 		subscriptionType = "address"
 	}
-	isPrimary := input.IsPrimaryLocation == nil || *input.IsPrimaryLocation
+	existingSubscriptions, err := userLocations.ListByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	location, err := findMatchingSignupLocation(ctx, locations, existingSubscriptions, canonicalAddress, resolved)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	locationName := strings.TrimSpace(input.LocationName)
+	if location == nil {
+		if locationName == "" {
+			locationName = defaultLocationName(user, canonicalAddress)
+		}
+		location = buildSignupLocation(accountID, locationName, canonicalAddress, resolved)
+		if err := locations.Create(ctx, location); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	} else {
+		if locationName != "" {
+			location.Name = locationName
+		}
+		applyResolvedSignupLocation(location, canonicalAddress, resolved)
+		if err := locations.Update(ctx, location); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+
+	isPrimary := resolveSignupPrimary(input.IsPrimaryLocation, existingSubscriptions, location.ID, subscriptionType)
 	subscription := &models.UserLocation{
 		UserID:               user.ID,
 		LocationID:           location.ID,
@@ -421,39 +414,12 @@ func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID i
 		IsPrimary:            isPrimary,
 		IsThunderCallEnabled: true,
 	}
-	if err := userLocations.Create(ctx, subscription); err != nil {
+	if err := userLocations.Upsert(ctx, subscription); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	methods := make([]models.UserContactMethod, 0, 2)
-	if voicePhone := strings.TrimSpace(input.VoicePhone); voicePhone != "" {
-		method := models.UserContactMethod{
-			UserID:      user.ID,
-			Channel:     models.ChannelVoice,
-			Destination: voicePhone,
-			IsPrimary:   true,
-			IsVerified:  false,
-			Active:      true,
-		}
-		if err := contactMethods.Create(ctx, &method); err != nil {
-			return nil, nil, nil, nil, err
-		}
-		methods = append(methods, method)
-	}
-
-	if emailAddress := strings.TrimSpace(input.EmailAddress); emailAddress != "" {
-		method := models.UserContactMethod{
-			UserID:      user.ID,
-			Channel:     models.ChannelEmail,
-			Destination: strings.ToLower(emailAddress),
-			IsPrimary:   true,
-			IsVerified:  false,
-			Active:      true,
-		}
-		if err := contactMethods.Create(ctx, &method); err != nil {
-			return nil, nil, nil, nil, err
-		}
-		methods = append(methods, method)
+	if err := upsertSignupContactMethods(ctx, contactMethods, user.ID, input); err != nil {
+		return nil, nil, nil, nil, err
 	}
 
 	if len(input.VoiceSettings) > 0 {
@@ -473,11 +439,233 @@ func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID i
 			}
 		}
 	}
+	methods, err := contactMethods.ListByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	return user, location, subscription, methods, nil
+}
+
+func findOrCreateSignupUser(ctx context.Context, users *usersrepo.Repository, contactMethods *usercontactmethodsrepo.Repository, accountID int64, input createResolvedUserInput, displayName string) (*models.User, error) {
+	if voicePhone := strings.TrimSpace(input.VoicePhone); voicePhone != "" {
+		userID, err := contactMethods.FindActiveUserIDByAccountAndChannelDestination(ctx, accountID, models.ChannelVoice, voicePhone)
+		if err != nil {
+			return nil, err
+		}
+		if userID != 0 {
+			user, err := users.GetByID(ctx, userID)
+			if err != nil {
+				return nil, err
+			}
+			if user != nil {
+				if mergeSignupUser(user, input, displayName) {
+					if err := users.Update(ctx, user); err != nil {
+						return nil, err
+					}
+				}
+				return user, nil
+			}
+		}
+	}
+
+	user := &models.User{
+		AccountID:   accountID,
+		ExternalID:  nullableTrimmedString(input.ExternalID),
+		FirstName:   nullableTrimmedString(input.FirstName),
+		LastName:    nullableTrimmedString(input.LastName),
+		DisplayName: nullableTrimmedString(displayName),
+		Title:       nullableTrimmedString(input.Title),
+		Active:      true,
+	}
+	if err := users.Create(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func mergeSignupUser(user *models.User, input createResolvedUserInput, displayName string) bool {
+	changed := false
+
+	if value := nullableTrimmedString(input.FirstName); value != nil && stringValue(user.FirstName) != *value {
+		user.FirstName = value
+		changed = true
+	}
+	if value := nullableTrimmedString(input.LastName); value != nil && stringValue(user.LastName) != *value {
+		user.LastName = value
+		changed = true
+	}
+	if value := nullableTrimmedString(displayName); value != nil && stringValue(user.DisplayName) != *value {
+		user.DisplayName = value
+		changed = true
+	}
+	if value := nullableTrimmedString(input.Title); value != nil && stringValue(user.Title) != *value {
+		user.Title = value
+		changed = true
+	}
+	if !user.Active {
+		user.Active = true
+		changed = true
+	}
+
+	return changed
+}
+
+func findMatchingSignupLocation(ctx context.Context, locations *locationsrepo.Repository, subscriptions []models.UserLocation, address addressRequest, resolved geocode.ResolvedLocation) (*models.Location, error) {
+	targetKey := signupLocationKey(address, resolved)
+	for _, subscription := range subscriptions {
+		location, err := locations.GetByID(ctx, subscription.LocationID)
+		if err != nil {
+			return nil, err
+		}
+		if location == nil {
+			continue
+		}
+		if locationSignupKey(location) == targetKey {
+			return location, nil
+		}
+	}
+	return nil, nil
+}
+
+func buildSignupLocation(accountID int64, name string, address addressRequest, resolved geocode.ResolvedLocation) *models.Location {
+	location := &models.Location{
+		AccountID: accountID,
+		Name:      name,
+	}
+	applyResolvedSignupLocation(location, address, resolved)
+	return location
+}
+
+func applyResolvedSignupLocation(location *models.Location, address addressRequest, resolved geocode.ResolvedLocation) {
+	coverageWKT := geocode.PointWKT(resolved.Latitude, resolved.Longitude)
+	latitude := resolved.Latitude
+	longitude := resolved.Longitude
+
+	location.AddressLine1 = nullableTrimmedString(address.Line1)
+	location.AddressLine2 = nullableTrimmedString(address.Line2)
+	location.City = nullableTrimmedString(address.City)
+	location.StateCode = nullableTrimmedString(strings.ToUpper(address.StateCode))
+	location.PostalCode = nullableTrimmedString(address.PostalCode)
+	location.CountyFIPS = nullableTrimmedString(resolved.CountyFIPS)
+	location.NWSZone = nullableTrimmedString(resolved.NWSZone)
+	location.Latitude = &latitude
+	location.Longitude = &longitude
+	location.CoverageWKT = &coverageWKT
+	location.IsThunderCallEnabled = true
+	location.Active = true
+}
+
+func upsertSignupContactMethods(ctx context.Context, contactMethods *usercontactmethodsrepo.Repository, userID int64, input createResolvedUserInput) error {
+	if voicePhone := strings.TrimSpace(input.VoicePhone); voicePhone != "" {
+		method := models.UserContactMethod{
+			UserID:      userID,
+			Channel:     models.ChannelVoice,
+			Destination: voicePhone,
+			IsPrimary:   true,
+			IsVerified:  false,
+			Active:      true,
+		}
+		if err := contactMethods.Upsert(ctx, &method); err != nil {
+			return err
+		}
+	}
+
+	if emailAddress := strings.TrimSpace(input.EmailAddress); emailAddress != "" {
+		method := models.UserContactMethod{
+			UserID:      userID,
+			Channel:     models.ChannelEmail,
+			Destination: strings.ToLower(emailAddress),
+			IsPrimary:   true,
+			IsVerified:  false,
+			Active:      true,
+		}
+		if err := contactMethods.Upsert(ctx, &method); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func canonicalSignupAddress(address addressRequest, resolved geocode.ResolvedLocation) addressRequest {
+	canonical := addressRequest{
+		Line1:      strings.TrimSpace(address.Line1),
+		Line2:      strings.TrimSpace(address.Line2),
+		City:       strings.TrimSpace(address.City),
+		StateCode:  strings.ToUpper(strings.TrimSpace(address.StateCode)),
+		PostalCode: strings.TrimSpace(address.PostalCode),
+	}
+
+	matched := strings.TrimSpace(resolved.MatchedAddress)
+	if matched == "" {
+		return canonical
+	}
+
+	parts := strings.Split(matched, ",")
+	if len(parts) < 4 {
+		return canonical
+	}
+
+	canonical.Line1 = strings.TrimSpace(parts[0])
+	canonical.City = strings.TrimSpace(parts[1])
+	canonical.StateCode = strings.ToUpper(strings.TrimSpace(parts[2]))
+	canonical.PostalCode = strings.TrimSpace(strings.Join(parts[3:], ","))
+	return canonical
+}
+
+func signupLocationKey(address addressRequest, resolved geocode.ResolvedLocation) string {
+	return strings.Join([]string{
+		normalizeSignupKeyPart(address.Line1),
+		normalizeSignupKeyPart(address.Line2),
+		normalizeSignupKeyPart(address.City),
+		normalizeSignupKeyPart(address.StateCode),
+		normalizeSignupKeyPart(address.PostalCode),
+		normalizeSignupKeyPart(resolved.CountyFIPS),
+		normalizeSignupKeyPart(resolved.NWSZone),
+		fmt.Sprintf("%.7f", resolved.Latitude),
+		fmt.Sprintf("%.7f", resolved.Longitude),
+	}, "|")
+}
+
+func locationSignupKey(location *models.Location) string {
+	return strings.Join([]string{
+		normalizeSignupKeyPart(stringValue(location.AddressLine1)),
+		normalizeSignupKeyPart(stringValue(location.AddressLine2)),
+		normalizeSignupKeyPart(stringValue(location.City)),
+		normalizeSignupKeyPart(stringValue(location.StateCode)),
+		normalizeSignupKeyPart(stringValue(location.PostalCode)),
+		normalizeSignupKeyPart(stringValue(location.CountyFIPS)),
+		normalizeSignupKeyPart(stringValue(location.NWSZone)),
+		normalizeSignupFloatPtr(location.Latitude),
+		normalizeSignupFloatPtr(location.Longitude),
+	}, "|")
+}
+
+func normalizeSignupKeyPart(value string) string {
+	return strings.Join(strings.Fields(strings.ToUpper(strings.TrimSpace(value))), " ")
+}
+
+func normalizeSignupFloatPtr(value *float64) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.7f", *value)
+}
+
+func resolveSignupPrimary(preferred *bool, subscriptions []models.UserLocation, locationID int64, subscriptionType string) bool {
+	if preferred != nil {
+		return *preferred
+	}
+	for _, subscription := range subscriptions {
+		if subscription.LocationID == locationID && subscription.SubscriptionType == subscriptionType {
+			return subscription.IsPrimary
+		}
+	}
+	return len(subscriptions) == 0
 }
 
 func boolPtr(value bool) *bool {

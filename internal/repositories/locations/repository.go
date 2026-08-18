@@ -90,6 +90,59 @@ func (r *Repository) Create(ctx context.Context, location *models.Location) erro
 	return nil
 }
 
+func (r *Repository) Update(ctx context.Context, location *models.Location) error {
+	if location.CoverageWKT != nil {
+		_, err := r.db.ExecContext(
+			ctx,
+			`UPDATE locations
+			 SET name = ?,
+			     address_line_1 = ?, address_line_2 = ?, city = ?, state_code = ?, postal_code = ?,
+			     county_fips = ?, nws_zone = ?, latitude = ?, longitude = ?, coverage_geometry = ST_GeomFromText(?, 4326),
+			     is_thundercall_enabled = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+			 WHERE id = ?`,
+			location.Name,
+			sqlutil.StringValue(location.AddressLine1),
+			sqlutil.StringValue(location.AddressLine2),
+			sqlutil.StringValue(location.City),
+			sqlutil.StringValue(location.StateCode),
+			sqlutil.StringValue(location.PostalCode),
+			sqlutil.StringValue(location.CountyFIPS),
+			sqlutil.StringValue(location.NWSZone),
+			sqlutil.Float64Value(location.Latitude),
+			sqlutil.Float64Value(location.Longitude),
+			*location.CoverageWKT,
+			location.IsThunderCallEnabled,
+			location.Active,
+			location.ID,
+		)
+		return err
+	}
+
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE locations
+		 SET name = ?,
+		     address_line_1 = ?, address_line_2 = ?, city = ?, state_code = ?, postal_code = ?,
+		     county_fips = ?, nws_zone = ?, latitude = ?, longitude = ?, coverage_geometry = NULL,
+		     is_thundercall_enabled = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		location.Name,
+		sqlutil.StringValue(location.AddressLine1),
+		sqlutil.StringValue(location.AddressLine2),
+		sqlutil.StringValue(location.City),
+		sqlutil.StringValue(location.StateCode),
+		sqlutil.StringValue(location.PostalCode),
+		sqlutil.StringValue(location.CountyFIPS),
+		sqlutil.StringValue(location.NWSZone),
+		sqlutil.Float64Value(location.Latitude),
+		sqlutil.Float64Value(location.Longitude),
+		location.IsThunderCallEnabled,
+		location.Active,
+		location.ID,
+	)
+	return err
+}
+
 func (r *Repository) GetByID(ctx context.Context, id int64) (*models.Location, error) {
 	row := r.db.QueryRowContext(ctx, selectLocationSQL()+` WHERE id = ?`, id)
 	return scanLocation(row)

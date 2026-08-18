@@ -3,6 +3,7 @@ package userlocations
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"thundercall-go/internal/models"
@@ -42,6 +43,39 @@ func (r *Repository) Create(ctx context.Context, userLocation *models.UserLocati
 	}
 	userLocation.ID = id
 	return nil
+}
+
+func (r *Repository) Upsert(ctx context.Context, userLocation *models.UserLocation) error {
+	row := r.db.QueryRowContext(
+		ctx,
+		`SELECT id
+		 FROM users_locations
+		 WHERE user_id = ? AND location_id = ? AND subscription_type = ?
+		 LIMIT 1`,
+		userLocation.UserID,
+		userLocation.LocationID,
+		userLocation.SubscriptionType,
+	)
+
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return r.Create(ctx, userLocation)
+		}
+		return err
+	}
+
+	userLocation.ID = id
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE users_locations
+		 SET is_primary = ?, is_thundercall_enabled = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		userLocation.IsPrimary,
+		userLocation.IsThunderCallEnabled,
+		userLocation.ID,
+	)
+	return err
 }
 
 func (r *Repository) ListByLocationIDs(ctx context.Context, locationIDs []int64) ([]models.UserLocation, error) {
