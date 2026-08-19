@@ -124,12 +124,14 @@ func (s *Server) ConfigurePublicSignupRateLimit(limit int, window time.Duration)
 	s.configurePublicSignupRateLimit(limit, window)
 }
 
-func (s *Server) allowPublicSignupRequest(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) allowPublicSignupRequest(w http.ResponseWriter, r *http.Request, clientID string) bool {
 	if s.publicSignupLimiter == nil {
 		return true
 	}
 
-	clientID := publicSignupClientID(r)
+	if strings.TrimSpace(clientID) == "" {
+		clientID = publicSignupClientID(r)
+	}
 	allowed, retryAfter := s.publicSignupLimiter.Allow(clientID)
 	if allowed {
 		return true

@@ -293,6 +293,8 @@ These are the env vars loaded by `internal/config`.
 | `THUNDERCALL_API_SESSION_TTL` | `24h` | Bearer-session TTL. |
 | `THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_COUNT` | `10` | Max public signup POSTs allowed per client per window. |
 | `THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_WINDOW` | `1m` | Public signup rate-limit window. Set count or window to `0` to disable app-side signup throttling. |
+| `THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_SHARED_SECRET` | empty | Optional shared secret required for signed public signup proxy requests. When set, unsigned direct browser requests to the new signup endpoint are rejected with `401`. |
+| `THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_MAX_SKEW` | `5m` | Max allowed clock skew for signed public signup proxy timestamps. |
 
 ### Health Checks
 

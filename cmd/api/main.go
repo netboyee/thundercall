@@ -69,6 +69,7 @@ func runServer(cfg config.Config) error {
 		Handler: func() http.Handler {
 			apiServer := httpapi.NewServerWithTwilio(db, cfg.API.SessionTTL, geocode.New(cfg.Geocoding), cfg.Twilio)
 			apiServer.ConfigurePublicSignupRateLimit(cfg.API.PublicSignupRateLimitCount, cfg.API.PublicSignupRateLimitWindow)
+			apiServer.ConfigurePublicSignupProxyAuth(cfg.API.PublicSignupProxySecret, cfg.API.PublicSignupProxyMaxSkew)
 			return apiServer.Handler()
 		}(),
 		ReadHeaderTimeout: 5 * time.Second,

@@ -727,11 +727,16 @@ user and location, and stores per-alert voice preferences from the
 
 Notes:
 
-- authentication is not required
+- authentication is not required for legacy-compatible callers
 - the same handler is also available at `POST /api/products/{productId}/records` and `POST /v1/public/signups`
 - responses from this endpoint use a top-level `message` field for compatibility with the legacy form
 - the handler is rate-limited per client IP and returns `429 Too Many Requests`
   plus `Retry-After` when the configured limit is exceeded
+- if `THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_SHARED_SECRET` is set, the new API path requires:
+  - `X-Thundercall-Signup-Timestamp: <RFC3339 UTC timestamp>`
+  - `X-Thundercall-Signup-Signature: <hex hmac-sha256 over METHOD + "\\n" + PATH + "\\n" + TIMESTAMP + "\\n" + RAW_BODY>`
+  - optional `X-Thundercall-Client-IP: <original end-user ip>` for trusted rate limiting behind a proxy
+- this is intended for the new Cloudflare Pages signup proxy; the legacy direct browser flow can remain unchanged until cutover
 - a true geocode no-match still returns `422 Unprocessable Entity`
 - transient upstream resolver failures do not reject the signup; the API still
   creates the user and location, leaves geodata nullable, and returns
@@ -786,6 +791,7 @@ Request body:
 Notes:
 
 - `accountId` is the new ThunderCall account id for the station receiving signups
+- `companyId` is tolerated for compatibility with the existing form payload but is ignored by the new API
 
 Warning type mapping:
 

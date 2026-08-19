@@ -96,6 +96,8 @@ type APIConfig struct {
 	SessionTTL                  time.Duration
 	PublicSignupRateLimitCount  int
 	PublicSignupRateLimitWindow time.Duration
+	PublicSignupProxySecret     string
+	PublicSignupProxyMaxSkew    time.Duration
 }
 
 type HealthConfig struct {
@@ -177,6 +179,8 @@ func Load() (Config, error) {
 			SessionTTL:                  durationValueOrDefault("THUNDERCALL_API_SESSION_TTL", 24*time.Hour),
 			PublicSignupRateLimitCount:  intValueOrDefault("THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_COUNT", 10),
 			PublicSignupRateLimitWindow: durationValueOrDefault("THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_WINDOW", time.Minute),
+			PublicSignupProxySecret:     os.Getenv("THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_SHARED_SECRET"),
+			PublicSignupProxyMaxSkew:    durationValueOrDefault("THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_MAX_SKEW", 5*time.Minute),
 		},
 		Health: HealthConfig{
 			HeartbeatPath:   os.Getenv("THUNDERCALL_HEARTBEAT_PATH"),

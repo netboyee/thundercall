@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -43,6 +44,7 @@ var legacyPublicSignupSupportedMessageTypes = []string{
 type legacyPublicSignupRequest struct {
 	ExternalID  string                      `json:"externalId"`
 	AccountID   int64                       `json:"accountId"`
+	CompanyID   int64                       `json:"companyId"`
 	FirstName   string                      `json:"firstName"`
 	LastName    string                      `json:"lastName"`
 	DisplayName string                      `json:"displayName"`
@@ -106,7 +108,21 @@ type createResolvedUserInput struct {
 func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 	writePublicSignupCORSHeaders(w)
 
-	if !s.allowPublicSignupRequest(w, r) {
+	defer r.Body.Close()
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writePublicSignupError(w, http.StatusBadRequest, "Invalid JSON body.")
+		return
+	}
+
+	proxyAuth, err := s.validatePublicSignupProxyRequest(r, body)
+	if err != nil {
+		writePublicSignupError(w, http.StatusUnauthorized, "Unauthorized.")
+		return
+	}
+
+	if !s.allowPublicSignupRequest(w, r, proxyAuth.clientID) {
 		return
 	}
 
@@ -116,7 +132,7 @@ func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var request legacyPublicSignupRequest
-	if err := decodeJSON(r, &request); err != nil {
+	if err := decodeJSONBytes(body, &request); err != nil {
 		writePublicSignupError(w, http.StatusBadRequest, "Invalid JSON body.")
 		return
 	}

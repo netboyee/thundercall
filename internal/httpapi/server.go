@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -29,24 +30,26 @@ type twilioVoiceLookup interface {
 }
 
 type Server struct {
-	db                  *sql.DB
-	accounts            *accountsrepo.Repository
-	apiUsers            *apiusersrepo.Repository
-	apiSessions         *apisessionsrepo.Repository
-	users               *usersrepo.Repository
-	locations           *locationsrepo.Repository
-	userLocations       *userlocationsrepo.Repository
-	contactMethods      *usercontactmethodsrepo.Repository
-	userMessages        *usersmessagesrepo.Repository
-	notifications       *notificationsrepo.Repository
-	deliveryAttempts    *deliveryattemptsrepo.Repository
-	resolver            geocode.Resolver
-	twilioVoice         twilioVoiceLookup
-	twilioAuthToken     string
-	sessionTTL          time.Duration
-	publicSignupLimiter *requestRateLimiter
-	now                 func() time.Time
-	pingDB              func(context.Context) error
+	db                       *sql.DB
+	accounts                 *accountsrepo.Repository
+	apiUsers                 *apiusersrepo.Repository
+	apiSessions              *apisessionsrepo.Repository
+	users                    *usersrepo.Repository
+	locations                *locationsrepo.Repository
+	userLocations            *userlocationsrepo.Repository
+	contactMethods           *usercontactmethodsrepo.Repository
+	userMessages             *usersmessagesrepo.Repository
+	notifications            *notificationsrepo.Repository
+	deliveryAttempts         *deliveryattemptsrepo.Repository
+	resolver                 geocode.Resolver
+	twilioVoice              twilioVoiceLookup
+	twilioAuthToken          string
+	sessionTTL               time.Duration
+	publicSignupLimiter      *requestRateLimiter
+	publicSignupProxySecret  string
+	publicSignupProxyMaxSkew time.Duration
+	now                      func() time.Time
+	pingDB                   func(context.Context) error
 }
 
 func NewServer(db *sql.DB, sessionTTL time.Duration, resolver geocode.Resolver) *Server {
@@ -60,22 +63,23 @@ func NewServerWithTwilio(db *sql.DB, sessionTTL time.Duration, resolver geocode.
 	}
 
 	server := &Server{
-		db:               db,
-		accounts:         accountsrepo.New(db),
-		apiUsers:         apiusersrepo.New(db),
-		apiSessions:      apisessionsrepo.New(db),
-		users:            usersrepo.New(db),
-		locations:        locationsrepo.New(db),
-		userLocations:    userlocationsrepo.New(db),
-		contactMethods:   usercontactmethodsrepo.New(db),
-		userMessages:     usersmessagesrepo.New(db),
-		notifications:    notificationsrepo.New(db),
-		deliveryAttempts: deliveryattemptsrepo.New(db),
-		resolver:         resolver,
-		twilioVoice:      twilioVoice,
-		twilioAuthToken:  strings.TrimSpace(twilioCfg.AuthToken),
-		sessionTTL:       sessionTTL,
-		now:              func() time.Time { return time.Now().UTC() },
+		db:                       db,
+		accounts:                 accountsrepo.New(db),
+		apiUsers:                 apiusersrepo.New(db),
+		apiSessions:              apisessionsrepo.New(db),
+		users:                    usersrepo.New(db),
+		locations:                locationsrepo.New(db),
+		userLocations:            userlocationsrepo.New(db),
+		contactMethods:           usercontactmethodsrepo.New(db),
+		userMessages:             usersmessagesrepo.New(db),
+		notifications:            notificationsrepo.New(db),
+		deliveryAttempts:         deliveryattemptsrepo.New(db),
+		resolver:                 resolver,
+		twilioVoice:              twilioVoice,
+		twilioAuthToken:          strings.TrimSpace(twilioCfg.AuthToken),
+		sessionTTL:               sessionTTL,
+		publicSignupProxyMaxSkew: 5 * time.Minute,
+		now:                      func() time.Time { return time.Now().UTC() },
 	}
 	server.configurePublicSignupRateLimit(defaultPublicSignupRateLimitCount, defaultPublicSignupRateLimitWindow)
 	if db != nil {
@@ -132,6 +136,12 @@ func decodeJSON(r *http.Request, dest any) error {
 	defer r.Body.Close()
 
 	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(dest)
+}
+
+func decodeJSONBytes(data []byte, dest any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(dest)
 }
