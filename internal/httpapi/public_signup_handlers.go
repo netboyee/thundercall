@@ -106,6 +106,10 @@ type createResolvedUserInput struct {
 func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 	writePublicSignupCORSHeaders(w)
 
+	if !s.allowPublicSignupRequest(w, r) {
+		return
+	}
+
 	if s.db == nil || s.resolver == nil || s.accounts == nil {
 		writePublicSignupError(w, http.StatusInternalServerError, "Public signup is not configured.")
 		return
@@ -137,44 +141,80 @@ func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, err := s.resolver.ResolveAddress(r.Context(), input.Address.toGeocodeAddress())
+	var (
+		resolved          *geocode.ResolvedLocation
+		enrichmentPending bool
+		geocodeStatus     = "resolved"
+	)
+
+	resolvedLocation, err := s.resolver.ResolveAddress(r.Context(), input.Address.toGeocodeAddress())
 	if err != nil {
 		if errors.Is(err, geocode.ErrNoMatch) {
 			writePublicSignupError(w, http.StatusUnprocessableEntity, "Address could not be geocoded.")
 			return
 		}
-		writePublicSignupError(w, http.StatusBadGateway, "Failed to geocode address.")
-		return
-	}
-	if strings.TrimSpace(resolved.CountyFIPS) == "" || strings.TrimSpace(resolved.NWSZone) == "" {
-		writePublicSignupError(w, http.StatusUnprocessableEntity, "Address could not be enriched with county FIPS and NWS zone.")
-		return
+		enrichmentPending = true
+		geocodeStatus = "pending"
+		signupLogger.Warnf(
+			"event=user_signup_geocode_pending account_id=%d address=%q error=%v",
+			account.ID,
+			input.Address.toGeocodeAddress().OneLine(),
+			err,
+		)
+	} else {
+		resolved = &resolvedLocation
+		if strings.TrimSpace(resolvedLocation.CountyFIPS) == "" || strings.TrimSpace(resolvedLocation.NWSZone) == "" {
+			enrichmentPending = true
+			geocodeStatus = "partial"
+			signupLogger.Warnf(
+				"event=user_signup_geocode_partial account_id=%d address=%q county_fips=%s nws_zone=%s",
+				account.ID,
+				input.Address.toGeocodeAddress().OneLine(),
+				resolvedLocation.CountyFIPS,
+				resolvedLocation.NWSZone,
+			)
+		}
 	}
 
-	user, location, subscription, methods, err := s.createUserWithResolvedLocation(r.Context(), account.ID, input, resolved)
+	user, location, subscription, methods, err := s.createUserWithSignupLocation(r.Context(), account.ID, input, resolved)
 	if err != nil {
 		writePublicSignupError(w, http.StatusInternalServerError, "Failed to create record.")
 		return
 	}
+	resolvedCountyFIPS := ""
+	resolvedNWSZone := ""
+	if resolved != nil {
+		resolvedCountyFIPS = strings.TrimSpace(resolved.CountyFIPS)
+		resolvedNWSZone = strings.TrimSpace(resolved.NWSZone)
+	}
 	signupLogger.Infof(
-		"event=user_signup account_id=%d user_id=%d location_id=%d external_id=%s county_fips=%s nws_zone=%s contact_methods=%d",
+		"event=user_signup account_id=%d user_id=%d location_id=%d external_id=%s geocode_status=%s county_fips=%s nws_zone=%s contact_methods=%d",
 		account.ID,
 		user.ID,
 		location.ID,
 		stringValue(user.ExternalID),
-		resolved.CountyFIPS,
-		resolved.NWSZone,
+		geocodeStatus,
+		resolvedCountyFIPS,
+		resolvedNWSZone,
 		len(methods),
 	)
 
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"message":        "Record created.",
-		"user":           userResponse(user),
-		"location":       locationResponse(location),
-		"subscription":   subscriptionResponse(subscription),
-		"contactMethods": contactMethodResponses(methods),
-		"resolved":       resolvedLocationPayload(resolved),
-	})
+	response := map[string]any{
+		"message":           "Record created.",
+		"enrichmentPending": enrichmentPending,
+		"user":              userResponse(user),
+		"location":          locationResponse(location),
+		"subscription":      subscriptionResponse(subscription),
+		"contactMethods":    contactMethodResponses(methods),
+	}
+	if enrichmentPending {
+		response["message"] = "Record created; location enrichment pending."
+	}
+	if resolved != nil {
+		response["resolved"] = resolvedLocationPayload(*resolved)
+	}
+
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func (s *Server) handlePublicSignupOptions(w http.ResponseWriter, _ *http.Request) {
@@ -347,7 +387,7 @@ func (s *Server) resolvePublicSignupAccount(ctx context.Context, accountID int64
 	return account, nil
 }
 
-func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID int64, input createResolvedUserInput, resolved geocode.ResolvedLocation) (*models.User, *models.Location, *models.UserLocation, []models.UserContactMethod, error) {
+func (s *Server) createUserWithSignupLocation(ctx context.Context, accountID int64, input createResolvedUserInput, resolved *geocode.ResolvedLocation) (*models.User, *models.Location, *models.UserLocation, []models.UserContactMethod, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -383,7 +423,7 @@ func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID i
 		return nil, nil, nil, nil, err
 	}
 
-	location, err := findMatchingSignupLocation(ctx, locations, existingSubscriptions, canonicalAddress, resolved)
+	location, err := findMatchingSignupLocation(ctx, locations, existingSubscriptions, canonicalAddress)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -400,7 +440,7 @@ func (s *Server) createUserWithResolvedLocation(ctx context.Context, accountID i
 		if locationName != "" {
 			location.Name = locationName
 		}
-		applyResolvedSignupLocation(location, canonicalAddress, resolved)
+		applySignupLocationUpdate(location, canonicalAddress, resolved)
 		if err := locations.Update(ctx, location); err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -514,8 +554,8 @@ func mergeSignupUser(user *models.User, input createResolvedUserInput, displayNa
 	return changed
 }
 
-func findMatchingSignupLocation(ctx context.Context, locations *locationsrepo.Repository, subscriptions []models.UserLocation, address addressRequest, resolved geocode.ResolvedLocation) (*models.Location, error) {
-	targetKey := signupLocationKey(address, resolved)
+func findMatchingSignupLocation(ctx context.Context, locations *locationsrepo.Repository, subscriptions []models.UserLocation, address addressRequest) (*models.Location, error) {
+	targetKey := signupLocationKey(address)
 	for _, subscription := range subscriptions {
 		location, err := locations.GetByID(ctx, subscription.LocationID)
 		if err != nil {
@@ -531,32 +571,44 @@ func findMatchingSignupLocation(ctx context.Context, locations *locationsrepo.Re
 	return nil, nil
 }
 
-func buildSignupLocation(accountID int64, name string, address addressRequest, resolved geocode.ResolvedLocation) *models.Location {
+func buildSignupLocation(accountID int64, name string, address addressRequest, resolved *geocode.ResolvedLocation) *models.Location {
 	location := &models.Location{
-		AccountID: accountID,
-		Name:      name,
+		AccountID:            accountID,
+		Name:                 name,
+		IsThunderCallEnabled: true,
+		Active:               true,
 	}
-	applyResolvedSignupLocation(location, address, resolved)
+	applySignupLocationUpdate(location, address, resolved)
 	return location
 }
 
-func applyResolvedSignupLocation(location *models.Location, address addressRequest, resolved geocode.ResolvedLocation) {
-	coverageWKT := geocode.PointWKT(resolved.Latitude, resolved.Longitude)
-	latitude := resolved.Latitude
-	longitude := resolved.Longitude
-
+func applySignupLocationUpdate(location *models.Location, address addressRequest, resolved *geocode.ResolvedLocation) {
 	location.AddressLine1 = nullableTrimmedString(address.Line1)
 	location.AddressLine2 = nullableTrimmedString(address.Line2)
 	location.City = nullableTrimmedString(address.City)
 	location.StateCode = nullableTrimmedString(strings.ToUpper(address.StateCode))
 	location.PostalCode = nullableTrimmedString(address.PostalCode)
-	location.CountyFIPS = nullableTrimmedString(resolved.CountyFIPS)
-	location.NWSZone = nullableTrimmedString(resolved.NWSZone)
-	location.Latitude = &latitude
-	location.Longitude = &longitude
-	location.CoverageWKT = &coverageWKT
 	location.IsThunderCallEnabled = true
 	location.Active = true
+
+	if resolved == nil {
+		return
+	}
+
+	if countyFIPS := nullableTrimmedString(resolved.CountyFIPS); countyFIPS != nil {
+		location.CountyFIPS = countyFIPS
+	}
+	if nwsZone := nullableTrimmedString(resolved.NWSZone); nwsZone != nil {
+		location.NWSZone = nwsZone
+	}
+	if resolvedLocationHasCoordinates(resolved) {
+		coverageWKT := geocode.PointWKT(resolved.Latitude, resolved.Longitude)
+		latitude := resolved.Latitude
+		longitude := resolved.Longitude
+		location.Latitude = &latitude
+		location.Longitude = &longitude
+		location.CoverageWKT = &coverageWKT
+	}
 }
 
 func upsertSignupContactMethods(ctx context.Context, contactMethods *usercontactmethodsrepo.Repository, userID int64, input createResolvedUserInput) error {
@@ -591,13 +643,17 @@ func upsertSignupContactMethods(ctx context.Context, contactMethods *usercontact
 	return nil
 }
 
-func canonicalSignupAddress(address addressRequest, resolved geocode.ResolvedLocation) addressRequest {
+func canonicalSignupAddress(address addressRequest, resolved *geocode.ResolvedLocation) addressRequest {
 	canonical := addressRequest{
 		Line1:      strings.TrimSpace(address.Line1),
 		Line2:      strings.TrimSpace(address.Line2),
 		City:       strings.TrimSpace(address.City),
 		StateCode:  strings.ToUpper(strings.TrimSpace(address.StateCode)),
 		PostalCode: strings.TrimSpace(address.PostalCode),
+	}
+
+	if resolved == nil {
+		return canonical
 	}
 
 	matched := strings.TrimSpace(resolved.MatchedAddress)
@@ -617,17 +673,13 @@ func canonicalSignupAddress(address addressRequest, resolved geocode.ResolvedLoc
 	return canonical
 }
 
-func signupLocationKey(address addressRequest, resolved geocode.ResolvedLocation) string {
+func signupLocationKey(address addressRequest) string {
 	return strings.Join([]string{
 		normalizeSignupKeyPart(address.Line1),
 		normalizeSignupKeyPart(address.Line2),
 		normalizeSignupKeyPart(address.City),
 		normalizeSignupKeyPart(address.StateCode),
 		normalizeSignupKeyPart(address.PostalCode),
-		normalizeSignupKeyPart(resolved.CountyFIPS),
-		normalizeSignupKeyPart(resolved.NWSZone),
-		fmt.Sprintf("%.7f", resolved.Latitude),
-		fmt.Sprintf("%.7f", resolved.Longitude),
 	}, "|")
 }
 
@@ -638,22 +690,11 @@ func locationSignupKey(location *models.Location) string {
 		normalizeSignupKeyPart(stringValue(location.City)),
 		normalizeSignupKeyPart(stringValue(location.StateCode)),
 		normalizeSignupKeyPart(stringValue(location.PostalCode)),
-		normalizeSignupKeyPart(stringValue(location.CountyFIPS)),
-		normalizeSignupKeyPart(stringValue(location.NWSZone)),
-		normalizeSignupFloatPtr(location.Latitude),
-		normalizeSignupFloatPtr(location.Longitude),
 	}, "|")
 }
 
 func normalizeSignupKeyPart(value string) string {
 	return strings.Join(strings.Fields(strings.ToUpper(strings.TrimSpace(value))), " ")
-}
-
-func normalizeSignupFloatPtr(value *float64) string {
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%.7f", *value)
 }
 
 func resolveSignupPrimary(preferred *bool, subscriptions []models.UserLocation, locationID int64, subscriptionType string) bool {
@@ -670,4 +711,8 @@ func resolveSignupPrimary(preferred *bool, subscriptions []models.UserLocation, 
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+func resolvedLocationHasCoordinates(resolved *geocode.ResolvedLocation) bool {
+	return resolved != nil && (resolved.Latitude != 0 || resolved.Longitude != 0)
 }

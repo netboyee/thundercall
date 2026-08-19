@@ -92,8 +92,10 @@ type VoiceDispatcherConfig struct {
 }
 
 type APIConfig struct {
-	ListenAddr string
-	SessionTTL time.Duration
+	ListenAddr                  string
+	SessionTTL                  time.Duration
+	PublicSignupRateLimitCount  int
+	PublicSignupRateLimitWindow time.Duration
 }
 
 type HealthConfig struct {
@@ -171,8 +173,10 @@ func Load() (Config, error) {
 			IdleSleep:      durationValueOrDefault("THUNDERCALL_VOICE_IDLE_SLEEP", 2*time.Second),
 		},
 		API: APIConfig{
-			ListenAddr: valueOrDefault("THUNDERCALL_API_LISTEN_ADDR", ":8080"),
-			SessionTTL: durationValueOrDefault("THUNDERCALL_API_SESSION_TTL", 24*time.Hour),
+			ListenAddr:                  valueOrDefault("THUNDERCALL_API_LISTEN_ADDR", ":8080"),
+			SessionTTL:                  durationValueOrDefault("THUNDERCALL_API_SESSION_TTL", 24*time.Hour),
+			PublicSignupRateLimitCount:  intValueOrDefault("THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_COUNT", 10),
+			PublicSignupRateLimitWindow: durationValueOrDefault("THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_WINDOW", time.Minute),
 		},
 		Health: HealthConfig{
 			HeartbeatPath:   os.Getenv("THUNDERCALL_HEARTBEAT_PATH"),

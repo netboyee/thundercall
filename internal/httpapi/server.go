@@ -29,23 +29,24 @@ type twilioVoiceLookup interface {
 }
 
 type Server struct {
-	db               *sql.DB
-	accounts         *accountsrepo.Repository
-	apiUsers         *apiusersrepo.Repository
-	apiSessions      *apisessionsrepo.Repository
-	users            *usersrepo.Repository
-	locations        *locationsrepo.Repository
-	userLocations    *userlocationsrepo.Repository
-	contactMethods   *usercontactmethodsrepo.Repository
-	userMessages     *usersmessagesrepo.Repository
-	notifications    *notificationsrepo.Repository
-	deliveryAttempts *deliveryattemptsrepo.Repository
-	resolver         geocode.Resolver
-	twilioVoice      twilioVoiceLookup
-	twilioAuthToken  string
-	sessionTTL       time.Duration
-	now              func() time.Time
-	pingDB           func(context.Context) error
+	db                  *sql.DB
+	accounts            *accountsrepo.Repository
+	apiUsers            *apiusersrepo.Repository
+	apiSessions         *apisessionsrepo.Repository
+	users               *usersrepo.Repository
+	locations           *locationsrepo.Repository
+	userLocations       *userlocationsrepo.Repository
+	contactMethods      *usercontactmethodsrepo.Repository
+	userMessages        *usersmessagesrepo.Repository
+	notifications       *notificationsrepo.Repository
+	deliveryAttempts    *deliveryattemptsrepo.Repository
+	resolver            geocode.Resolver
+	twilioVoice         twilioVoiceLookup
+	twilioAuthToken     string
+	sessionTTL          time.Duration
+	publicSignupLimiter *requestRateLimiter
+	now                 func() time.Time
+	pingDB              func(context.Context) error
 }
 
 func NewServer(db *sql.DB, sessionTTL time.Duration, resolver geocode.Resolver) *Server {
@@ -76,6 +77,7 @@ func NewServerWithTwilio(db *sql.DB, sessionTTL time.Duration, resolver geocode.
 		sessionTTL:       sessionTTL,
 		now:              func() time.Time { return time.Now().UTC() },
 	}
+	server.configurePublicSignupRateLimit(defaultPublicSignupRateLimitCount, defaultPublicSignupRateLimitWindow)
 	if db != nil {
 		server.pingDB = db.PingContext
 	}

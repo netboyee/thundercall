@@ -257,7 +257,7 @@ These are the env vars loaded by `internal/config`.
 | `THUNDERCALL_NWWS_PASSWORD` | none | Required for ingest runtime. |
 | `THUNDERCALL_NWWS_JOIN_PASSWORD` | same as `THUNDERCALL_NWWS_PASSWORD` | Optional separate room password. |
 | `THUNDERCALL_NWWS_NICK` | same as `THUNDERCALL_NWWS_USERNAME` | Optional MUC nick override. |
-| `THUNDERCALL_NWWS_PRODUCTS` | `SVR,FFW,TOR,WSW` | Allowed products persisted by ingest. |
+| `THUNDERCALL_NWWS_PRODUCTS` | `SVR,FFW,TOR,WSW` | Allowed raw NWWS/AWIPS products persisted by ingest. Matching is exact, so `SVS` is ignored unless `SVS` itself is configured. |
 | `THUNDERCALL_NWWS_LOG_FULL_MESSAGES` | `false` | When `true`, emits full NWWS bulletin text at `DEBUG` level. |
 | `THUNDERCALL_NWWS_IDLE_TIMEOUT` | `5m` | Consumer idle timeout watchdog. |
 
@@ -291,6 +291,8 @@ These are the env vars loaded by `internal/config`.
 | --- | --- | --- |
 | `THUNDERCALL_API_LISTEN_ADDR` | `:8080` | API listen address. |
 | `THUNDERCALL_API_SESSION_TTL` | `24h` | Bearer-session TTL. |
+| `THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_COUNT` | `10` | Max public signup POSTs allowed per client per window. |
+| `THUNDERCALL_API_PUBLIC_SIGNUP_RATE_LIMIT_WINDOW` | `1m` | Public signup rate-limit window. Set count or window to `0` to disable app-side signup throttling. |
 
 ### Health Checks
 
@@ -391,6 +393,12 @@ These all map to the same public signup flow:
 - `POST /api/products/{productId}/records`
 - `POST /v1/public/signups`
 
+The public signup handler is rate-limited per client IP by default and returns
+`429 Too Many Requests` with a `Retry-After` header when the limit is exceeded.
+If the upstream geocoder has a transient failure, signup still succeeds and the
+location is stored with enrichment pending. True no-match addresses still
+return `422 Unprocessable Entity`.
+
 ### Authenticated Operator API
 
 - `POST /v1/auth/login`
@@ -470,6 +478,17 @@ This test is not build-tagged, but it still uses the disposable MySQL harness:
   - `TestHandlePublicSignupCreatesUserLocationContactsAndSettings`
   - verifies the public signup flow creates the user, location, contact
     methods, subscription, and warning settings correctly
+  - `TestHandlePublicSignupCreatesPendingLocationWhenResolverFailsUpstream`
+  - verifies public signup still creates the user/location when the upstream
+    resolver fails and leaves geodata empty for later enrichment
+  - `TestHandlePublicSignupRejectsAddressNoMatch`
+  - verifies a true address no-match still fails and does not create records
+  - `TestHandlePublicSignupEnrichesPendingLocationWhenResolverRecovers`
+  - verifies a later successful signup enriches the previously pending
+    location instead of creating a second one
+  - `TestHandlePublicSignupCreatesLocationWhenEnrichmentIsPartial`
+  - verifies a partially enriched location is still accepted and preserves the
+    resolved pieces that were available
 
 ### Useful Test Commands
 

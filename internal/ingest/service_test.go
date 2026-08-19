@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"thundercall-go/internal/nwws"
-	"thundercall-go/internal/thundercall"
 )
 
 func TestProcessEnvelopeSkipsUnconfiguredProductsBeforePersistence(t *testing.T) {
@@ -89,7 +88,7 @@ func TestProcessEnvelopeStillRequiresDatabaseForConfiguredBulletins(t *testing.T
 	}
 }
 
-func TestProcessEnvelopeAllowsConfiguredStatementUpdatesViaPrimaryVTEC(t *testing.T) {
+func TestProcessEnvelopeSkipsStatementUpdatesWhenRawProductIsUnconfigured(t *testing.T) {
 	service := NewService(nil, "thundercall:messages", []string{"SVR"})
 
 	bodyBytes, err := os.ReadFile(filepath.Join("..", "nwws", "testdata", "examples_03_SVSDMX.txt"))
@@ -97,45 +96,33 @@ func TestProcessEnvelopeAllowsConfiguredStatementUpdatesViaPrimaryVTEC(t *testin
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	_, err = service.ProcessEnvelope(context.Background(), nwws.StanzaEnvelope{
+	result, err := service.ProcessEnvelope(context.Background(), nwws.StanzaEnvelope{
 		AWIPSID:    "SVSDMX",
 		ExternalID: "statement-update",
 		Body:       string(bodyBytes),
 	})
-	if err == nil {
-		t.Fatalf("ProcessEnvelope() error = nil, want database is required")
+	if err != nil {
+		t.Fatalf("ProcessEnvelope() error = %v", err)
+	}
+	if result.IgnoredCount != 1 {
+		t.Fatalf("IgnoredCount = %d, want 1", result.IgnoredCount)
+	}
+	if result.SourceMessageID != 0 {
+		t.Fatalf("SourceMessageID = %d, want 0", result.SourceMessageID)
 	}
 }
 
-func TestRequestAllowedUsesUnderlyingAlertFamilyForStatementProducts(t *testing.T) {
+func TestRequestAllowedMatchesOnlyRawConfiguredProduct(t *testing.T) {
 	service := NewService(nil, "thundercall:messages", []string{"SVR"})
 
-	allowed := service.requestAllowed(thundercall.IncomingMessageRequest{
-		MessageSource:    "NWWS",
-		MessageEvent:     "SVS",
-		PrimaryVTECCount: 1,
-		VTECProductClass: "O",
-		VTECOfficeID:     "KDMX",
-		VTECPhenomenon:   "SV",
-		VTECSignificance: "W",
-		VTECETN:          "0123",
-	}, "SVS")
-	if !allowed {
-		t.Fatal("requestAllowed() = false, want true for SVS wrapping an allowed severe thunderstorm warning")
+	if !service.requestAllowed("SVR") {
+		t.Fatal("requestAllowed(SVR) = false, want true")
 	}
-
-	disallowed := service.requestAllowed(thundercall.IncomingMessageRequest{
-		MessageSource:    "NWWS",
-		MessageEvent:     "FLS",
-		PrimaryVTECCount: 1,
-		VTECProductClass: "O",
-		VTECOfficeID:     "KDVN",
-		VTECPhenomenon:   "FL",
-		VTECSignificance: "W",
-		VTECETN:          "0012",
-	}, "FLS")
-	if disallowed {
-		t.Fatal("requestAllowed() = true, want false when the underlying alert family is not configured")
+	if service.requestAllowed("SVS") {
+		t.Fatal("requestAllowed(SVS) = true, want false when only the raw SVR product is configured")
+	}
+	if service.requestAllowed("FLS") {
+		t.Fatal("requestAllowed(FLS) = true, want false")
 	}
 }
 

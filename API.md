@@ -730,6 +730,12 @@ Notes:
 - authentication is not required
 - the same handler is also available at `POST /api/products/{productId}/records` and `POST /v1/public/signups`
 - responses from this endpoint use a top-level `message` field for compatibility with the legacy form
+- the handler is rate-limited per client IP and returns `429 Too Many Requests`
+  plus `Retry-After` when the configured limit is exceeded
+- a true geocode no-match still returns `422 Unprocessable Entity`
+- transient upstream resolver failures do not reject the signup; the API still
+  creates the user and location, leaves geodata nullable, and returns
+  `"enrichmentPending": true`
 
 Request body:
 
@@ -796,6 +802,7 @@ Success response:
 ```json
 {
   "message": "Record created.",
+  "enrichmentPending": false,
   "user": {
     "id": 95199,
     "accountId": 8,
@@ -860,6 +867,20 @@ Success response:
   }
 }
 ```
+
+If address geocoding or weather.gov enrichment is temporarily unavailable, the
+same endpoint still returns `201 Created` with:
+
+```json
+{
+  "message": "Record created; location enrichment pending.",
+  "enrichmentPending": true
+}
+```
+
+In that case the created location may have `null` `latitude`, `longitude`,
+`countyFips`, `nwsZone`, and `coverageWKT` until a later enrichment pass fills
+them in.
 
 Common errors:
 

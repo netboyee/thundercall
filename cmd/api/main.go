@@ -65,8 +65,12 @@ func runServer(cfg config.Config) error {
 	defer db.Close()
 
 	server := &http.Server{
-		Addr:              cfg.API.ListenAddr,
-		Handler:           httpapi.NewServerWithTwilio(db, cfg.API.SessionTTL, geocode.New(cfg.Geocoding), cfg.Twilio).Handler(),
+		Addr: cfg.API.ListenAddr,
+		Handler: func() http.Handler {
+			apiServer := httpapi.NewServerWithTwilio(db, cfg.API.SessionTTL, geocode.New(cfg.Geocoding), cfg.Twilio)
+			apiServer.ConfigurePublicSignupRateLimit(cfg.API.PublicSignupRateLimitCount, cfg.API.PublicSignupRateLimitWindow)
+			return apiServer.Handler()
+		}(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

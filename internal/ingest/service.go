@@ -87,7 +87,7 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 		loadableCount := 0
 		ignoredCount := 0
 		for _, req := range previewRequests {
-			if !s.requestAllowed(req, effectiveCategory) {
+			if !s.requestAllowed(effectiveCategory) {
 				ignoredCount++
 				continue
 			}
@@ -202,7 +202,7 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 
 	requests := nwws.Normalize(parsed, sourceMessage.ID, externalID)
 	for _, req := range requests {
-		if !s.requestAllowed(req, effectiveCategory) {
+		if !s.requestAllowed(effectiveCategory) {
 			result.IgnoredCount++
 			continue
 		}
@@ -255,7 +255,7 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 					"event=nwws_message_duplicate source_message_id=%d external_id=%s product=%s event_code=%s action=%s segment=%d",
 					sourceMessage.ID,
 					externalID,
-					req.ConfiguredProductCode(),
+					effectiveCategory,
 					req.MessageEvent,
 					normalizeAction(req.VTECAction),
 					req.SourceSegmentIndex,
@@ -288,7 +288,7 @@ func (s *Service) ProcessEnvelope(ctx context.Context, envelope nwws.StanzaEnvel
 			message.ID,
 			externalID,
 			envelope.AWIPSID,
-			req.ConfiguredProductCode(),
+			effectiveCategory,
 			message.EventCode,
 			normalizeAction(req.VTECAction),
 			messageKind(req.VTECAction),
@@ -335,22 +335,8 @@ func (s *Service) productAllowed(product string) bool {
 	return ok
 }
 
-func (s *Service) requestAllowed(req thundercall.IncomingMessageRequest, fallbackProducts ...string) bool {
-	if len(s.allowedProducts) == 0 {
-		return true
-	}
-
-	if s.productAllowed(req.ConfiguredProductCode()) {
-		return true
-	}
-
-	for _, product := range fallbackProducts {
-		if s.productAllowed(product) {
-			return true
-		}
-	}
-
-	return false
+func (s *Service) requestAllowed(product string) bool {
+	return s.productAllowed(product)
 }
 
 func (s *Service) skipUnconfiguredProduct(product string) bool {

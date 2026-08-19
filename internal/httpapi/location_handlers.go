@@ -250,7 +250,7 @@ func (s *Server) resolveLookupRequest(ctx context.Context, request locationLooku
 }
 
 func (s *Server) createUserWithLocation(ctx context.Context, accountID int64, request createUserRequest, resolved geocode.ResolvedLocation) (*models.User, *models.Location, *models.UserLocation, []models.UserContactMethod, error) {
-	return s.createUserWithResolvedLocation(ctx, accountID, createResolvedUserInput{
+	return s.createUserWithSignupLocation(ctx, accountID, createResolvedUserInput{
 		ExternalID:        request.ExternalID,
 		FirstName:         request.FirstName,
 		LastName:          request.LastName,
@@ -261,7 +261,7 @@ func (s *Server) createUserWithLocation(ctx context.Context, accountID int64, re
 		SubscriptionType:  request.SubscriptionType,
 		IsPrimaryLocation: request.IsPrimaryLocation,
 		Address:           request.Address,
-	}, resolved)
+	}, &resolved)
 }
 
 func resolvedLocationPayload(resolved geocode.ResolvedLocation) resolvedLocationResponse {
