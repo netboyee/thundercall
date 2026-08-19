@@ -145,6 +145,12 @@ Start NWWS ingest too:
 docker compose --profile nwws up --build
 ```
 
+Start everything in the background:
+
+```bash
+docker compose --profile nwws up -d --build
+```
+
 Useful commands:
 
 ```bash
@@ -159,6 +165,94 @@ docker build --target ingest -t thundercall-ingest .
 docker build --target worker -t thundercall-worker .
 docker build --target voice-dispatcher -t thundercall-voice-dispatcher .
 ```
+
+## EC2 Single-Host Bring-Up
+
+For a fresh Linux host where `git`, Docker Engine, and the Docker Compose
+plugin are already installed:
+
+1. Clone the repo and enter it:
+
+```bash
+git clone <your repo url>
+cd thundercall-go
+```
+
+2. Create the runtime env file:
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+3. Fill in at least these values in `.env.docker`:
+
+```dotenv
+THUNDERCALL_NWWS_USERNAME=...
+THUNDERCALL_NWWS_PASSWORD=...
+THUNDERCALL_NWWS_JOIN_PASSWORD=...
+THUNDERCALL_NWWS_NICK=...
+THUNDERCALL_NWWS_PRODUCTS=SVR,FFW,TOR,WSW
+
+THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_SHARED_SECRET=...
+
+THUNDERCALL_TWILIO_VOICE_LOG_ONLY=true
+TWILIO_VOICE_STATUS_CALLBACK=https://api.thundercall.com/api/providers/twilio/voice/status
+```
+
+Notes:
+
+- keep `THUNDERCALL_TWILIO_VOICE_LOG_ONLY=true` if you do not want live calls
+- `THUNDERCALL_API_PUBLIC_SIGNUP_PROXY_SHARED_SECRET` must match the secret
+  configured in the Cloudflare Pages signup project if you want the new signup
+  proxy flow to work
+- live Twilio credentials are optional while voice dry-run mode is enabled
+
+4. Build and start the full stack:
+
+```bash
+docker compose --profile nwws up -d --build
+```
+
+5. Create an operator user:
+
+```bash
+docker compose run --rm api create-user \
+  --account-id 1 \
+  --email admin@example.com \
+  --password 'change-me' \
+  --display-name 'ThunderCall Admin'
+```
+
+6. Check container health:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 api
+docker compose logs --tail=100 ingest
+docker compose logs --tail=100 worker
+docker compose logs --tail=100 voice-dispatcher
+```
+
+7. Make Docker and the compose stack come back after reboot:
+
+```bash
+sudo systemctl enable --now docker
+./ops/install-compose-service.sh
+sudo systemctl start thundercall-compose.service
+sudo systemctl status thundercall-compose.service
+```
+
+Important runtime notes:
+
+- MySQL data persists in the named Docker volume `mysql-data`, so container
+  recreation does not wipe the database
+- every service uses `restart: unless-stopped`
+- `autoheal` watches the labeled containers and restarts unhealthy ones
+- the compose unit created by `ops/install-compose-service.sh` brings the full
+  stack back after host reboot
+- the API is exposed on port `8080`; if you want public
+  `https://api.thundercall.com`, add a reverse proxy or load balancer in front
+  of it and point DNS there
 
 ### AMD64 Linux Builds
 
