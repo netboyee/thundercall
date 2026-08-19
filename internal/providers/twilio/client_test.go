@@ -42,8 +42,8 @@ func TestSendVoiceLogOnlyWithoutCredentials(t *testing.T) {
 	if result.ProviderMessageID != "dryrun-voice-1786547045000000123" {
 		t.Fatalf("SendVoice().ProviderMessageID = %q, want deterministic dry-run id", result.ProviderMessageID)
 	}
-	if result.Status != "sent" {
-		t.Fatalf("SendVoice().Status = %q, want %q", result.Status, "sent")
+	if result.Status != "completed" {
+		t.Fatalf("SendVoice().Status = %q, want %q", result.Status, "completed")
 	}
 	if !strings.Contains(logged, "+14085550123") {
 		t.Fatalf("SendVoice() log = %q, want destination", logged)

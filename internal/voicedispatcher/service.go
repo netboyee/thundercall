@@ -49,9 +49,14 @@ type Service struct {
 	cpsLimit      int
 
 	mu                 sync.Mutex
-	collapsedByMessage map[int64]string
+	collapsedByMessage map[int64]dispatchOutcome
 	recentDispatches   []time.Time
 	messageDispatches  map[int64]int
+}
+
+type dispatchOutcome struct {
+	providerMessageID string
+	delivered         bool
 }
 
 func NewService(
@@ -78,7 +83,7 @@ func NewService(
 		infof:              logger.Infof,
 		warnf:              logger.Warnf,
 		debugf:             logger.Debugf,
-		collapsedByMessage: make(map[int64]string),
+		collapsedByMessage: make(map[int64]dispatchOutcome),
 		messageDispatches:  make(map[int64]int),
 	}
 }
@@ -101,10 +106,10 @@ func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrep
 		return fmt.Errorf("voice sender is required")
 	}
 
-	if providerMessageID, ok, err := s.collapsedProviderMessageID(ctx, record); err != nil {
+	if outcome, ok, err := s.collapsedProviderMessageID(ctx, record); err != nil {
 		return err
 	} else if ok {
-		return s.markSent(ctx, record, providerMessageID, false)
+		return s.markProviderResult(ctx, record, outcome.providerMessageID, providerResultStatus(outcome.delivered), false)
 	}
 
 	sendTo := record.Attempt.Destination
@@ -136,7 +141,7 @@ func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrep
 		return s.handleSendError(persistCtx, record, sendTo, err)
 	}
 
-	if err := s.markSent(persistCtx, record, result.ProviderMessageID, true); err != nil {
+	if err := s.markProviderResult(persistCtx, record, result.ProviderMessageID, result.Status, true); err != nil {
 		return err
 	}
 
@@ -160,31 +165,34 @@ func (s *Service) ProcessAttempt(ctx context.Context, record deliveryattemptsrep
 	return nil
 }
 
-func (s *Service) collapsedProviderMessageID(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord) (string, bool, error) {
+func (s *Service) collapsedProviderMessageID(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord) (dispatchOutcome, bool, error) {
 	if !s.sender.CollapseVoiceOverrideCalls() || record.MessageID <= 0 {
-		return "", false, nil
+		return dispatchOutcome{}, false, nil
 	}
 
 	s.mu.Lock()
 	cached, ok := s.collapsedByMessage[record.MessageID]
 	s.mu.Unlock()
-	if ok && strings.TrimSpace(cached) != "" {
+	if ok && strings.TrimSpace(cached.providerMessageID) != "" {
 		return cached, true, nil
 	}
 
 	existing, err := s.attempts.GetLatestSentVoiceAttemptByMessageID(ctx, record.MessageID)
 	if err != nil {
-		return "", false, err
+		return dispatchOutcome{}, false, err
 	}
 	if existing == nil || existing.Attempt.ProviderMessageID == nil || strings.TrimSpace(*existing.Attempt.ProviderMessageID) == "" {
-		return "", false, nil
+		return dispatchOutcome{}, false, nil
 	}
 
-	providerMessageID := strings.TrimSpace(*existing.Attempt.ProviderMessageID)
+	outcome := dispatchOutcome{
+		providerMessageID: strings.TrimSpace(*existing.Attempt.ProviderMessageID),
+		delivered:         existing.Attempt.DeliveredAt != nil,
+	}
 	s.mu.Lock()
-	s.collapsedByMessage[record.MessageID] = providerMessageID
+	s.collapsedByMessage[record.MessageID] = outcome
 	s.mu.Unlock()
-	return providerMessageID, true, nil
+	return outcome, true, nil
 }
 
 func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, sendTo string, sendErr error) error {
@@ -243,6 +251,13 @@ func (s *Service) handleSendError(ctx context.Context, record deliveryattemptsre
 	return nil
 }
 
+func (s *Service) markProviderResult(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, providerMessageID string, providerStatus string, cacheCollapsed bool) error {
+	if providerResultDelivered(providerStatus) {
+		return s.markDelivered(ctx, record, providerMessageID, cacheCollapsed)
+	}
+	return s.markSent(ctx, record, providerMessageID, cacheCollapsed)
+}
+
 func (s *Service) markSent(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, providerMessageID string, cacheCollapsed bool) error {
 	now := s.now()
 	if err := s.attempts.UpdateStatus(ctx, record.Attempt.ID, "sent", &providerMessageID, nil, &now, nil); err != nil {
@@ -260,11 +275,54 @@ func (s *Service) markSent(ctx context.Context, record deliveryattemptsrepo.Voic
 
 	if cacheCollapsed && s.sender.CollapseVoiceOverrideCalls() && record.MessageID > 0 && strings.TrimSpace(providerMessageID) != "" {
 		s.mu.Lock()
-		s.collapsedByMessage[record.MessageID] = providerMessageID
+		s.collapsedByMessage[record.MessageID] = dispatchOutcome{providerMessageID: providerMessageID}
 		s.mu.Unlock()
 	}
 
 	return nil
+}
+
+func (s *Service) markDelivered(ctx context.Context, record deliveryattemptsrepo.VoiceDispatchRecord, providerMessageID string, cacheCollapsed bool) error {
+	now := s.now()
+	if err := s.attempts.UpdateStatus(ctx, record.Attempt.ID, "sent", &providerMessageID, nil, &now, &now); err != nil {
+		return err
+	}
+	if err := s.usersMessages.UpdateStatus(ctx, record.Attempt.UserMessageID, "sent", &now); err != nil {
+		return err
+	}
+	if record.Attempt.NotificationID != nil && s.notifications != nil {
+		requestedAt := record.Attempt.RequestedAt
+		if err := s.notifications.UpdateStatus(ctx, *record.Attempt.NotificationID, "sent", record.MessageID, &requestedAt, &now, &now); err != nil {
+			return err
+		}
+	}
+
+	if cacheCollapsed && s.sender.CollapseVoiceOverrideCalls() && record.MessageID > 0 && strings.TrimSpace(providerMessageID) != "" {
+		s.mu.Lock()
+		s.collapsedByMessage[record.MessageID] = dispatchOutcome{
+			providerMessageID: providerMessageID,
+			delivered:         true,
+		}
+		s.mu.Unlock()
+	}
+
+	return nil
+}
+
+func providerResultDelivered(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "delivered":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerResultStatus(delivered bool) string {
+	if delivered {
+		return "completed"
+	}
+	return "sent"
 }
 
 func int64Value(value *int64) int64 {

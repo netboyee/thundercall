@@ -132,7 +132,7 @@ func (p *Provider) SendVoice(_ context.Context, request VoiceRequest) (Result, e
 		return Result{
 			Provider:          "twilio_voice",
 			ProviderMessageID: providerMessageID,
-			Status:            "sent",
+			Status:            "completed",
 		}, nil
 	}
 	if p.client == nil {

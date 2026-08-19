@@ -3,6 +3,7 @@ package voicedispatcher
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,28 @@ func TestServiceProcessAttemptMarksSentOnSuccess(t *testing.T) {
 	}
 	if got := fixture.usersMessages.statuses[record.Attempt.UserMessageID]; got != "sent" {
 		t.Fatalf("user message status = %q, want sent", got)
+	}
+}
+
+func TestServiceProcessAttemptMarksDeliveredForCompletedProviderResult(t *testing.T) {
+	t.Parallel()
+
+	fixture := newServiceFixture()
+	fixture.sender.resultStatus = "completed"
+	record := fixture.record(106, 206, 306, "+15550000060")
+
+	if err := fixture.service.ProcessAttempt(context.Background(), record); err != nil {
+		t.Fatalf("ProcessAttempt() error = %v", err)
+	}
+
+	if fixture.attempts.deliveredAts[record.Attempt.ID] == nil {
+		t.Fatal("attempt delivered_at = nil, want simulated completion timestamp")
+	}
+	if fixture.usersMessages.deliveredAts[record.Attempt.UserMessageID] == nil {
+		t.Fatal("user_message delivered_at = nil, want simulated completion timestamp")
+	}
+	if fixture.notifications.deliveredAts[*record.Attempt.NotificationID] == nil {
+		t.Fatal("notification delivered_at = nil, want simulated completion timestamp")
 	}
 }
 
@@ -136,12 +159,19 @@ func newServiceFixture() *serviceFixture {
 	attempts := &fakeAttemptsRepository{
 		updatedStatuses:    make(map[int64]string),
 		providerMessageIDs: make(map[int64]string),
+		deliveredAts:       make(map[int64]*time.Time),
 		requeued:           make(map[int64]time.Time),
 		sentByMessage:      make(map[int64]string),
 		attemptMessages:    make(map[int64]int64),
 	}
-	usersMessages := &fakeUsersMessagesRepository{statuses: make(map[int64]string)}
-	notifications := &fakeNotificationsRepository{statuses: make(map[int64]string)}
+	usersMessages := &fakeUsersMessagesRepository{
+		statuses:     make(map[int64]string),
+		deliveredAts: make(map[int64]*time.Time),
+	}
+	notifications := &fakeNotificationsRepository{
+		statuses:     make(map[int64]string),
+		deliveredAts: make(map[int64]*time.Time),
+	}
 	sender := &fakeVoiceSender{}
 
 	service := NewService(attempts, usersMessages, notifications, sender, &fakeWaiter{}, 30*time.Second)
@@ -185,6 +215,7 @@ func (f *serviceFixture) record(attemptID int64, userMessageID int64, notificati
 type fakeAttemptsRepository struct {
 	updatedStatuses       map[int64]string
 	providerMessageIDs    map[int64]string
+	deliveredAts          map[int64]*time.Time
 	requeued              map[int64]time.Time
 	sentByMessage         map[int64]string
 	attemptMessages       map[int64]int64
@@ -208,11 +239,12 @@ func (r *fakeAttemptsRepository) GetLatestSentVoiceAttemptByMessageID(ctx contex
 	}, nil
 }
 
-func (r *fakeAttemptsRepository) UpdateStatus(ctx context.Context, id int64, status string, providerMessageID *string, _ *string, _ *time.Time, _ *time.Time) error {
+func (r *fakeAttemptsRepository) UpdateStatus(ctx context.Context, id int64, status string, providerMessageID *string, _ *string, _ *time.Time, deliveredAt *time.Time) error {
 	if r.failOnCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	r.updatedStatuses[id] = status
+	r.deliveredAts[id] = deliveredAt
 	if providerMessageID != nil {
 		r.providerMessageIDs[id] = *providerMessageID
 		if status == "sent" {
@@ -234,27 +266,31 @@ func (r *fakeAttemptsRepository) Requeue(ctx context.Context, id int64, _ *strin
 
 type fakeUsersMessagesRepository struct {
 	statuses              map[int64]string
+	deliveredAts          map[int64]*time.Time
 	failOnCanceledContext bool
 }
 
-func (r *fakeUsersMessagesRepository) UpdateStatus(ctx context.Context, id int64, status string, _ *time.Time) error {
+func (r *fakeUsersMessagesRepository) UpdateStatus(ctx context.Context, id int64, status string, deliveredAt *time.Time) error {
 	if r.failOnCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	r.statuses[id] = status
+	r.deliveredAts[id] = deliveredAt
 	return nil
 }
 
 type fakeNotificationsRepository struct {
 	statuses              map[int64]string
+	deliveredAts          map[int64]*time.Time
 	failOnCanceledContext bool
 }
 
-func (r *fakeNotificationsRepository) UpdateStatus(ctx context.Context, id int64, status string, _ int64, _ *time.Time, _ *time.Time, _ *time.Time) error {
+func (r *fakeNotificationsRepository) UpdateStatus(ctx context.Context, id int64, status string, _ int64, _ *time.Time, _ *time.Time, deliveredAt *time.Time) error {
 	if r.failOnCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	r.statuses[id] = status
+	r.deliveredAts[id] = deliveredAt
 	return nil
 }
 
@@ -262,6 +298,7 @@ type fakeVoiceSender struct {
 	sendErr          error
 	overrideTo       string
 	collapseOverride bool
+	resultStatus     string
 	calls            []twilioprovider.VoiceRequest
 	nextProviderID   int
 	afterSend        func()
@@ -276,11 +313,15 @@ func (s *fakeVoiceSender) SendVoice(_ context.Context, request twilioprovider.Vo
 		return twilioprovider.Result{}, s.sendErr
 	}
 	s.nextProviderID++
+	status := strings.TrimSpace(s.resultStatus)
+	if status == "" {
+		status = "queued"
+	}
 	providerID := fmt.Sprintf("call-%d", s.nextProviderID)
 	return twilioprovider.Result{
 		Provider:          "twilio_voice",
 		ProviderMessageID: providerID,
-		Status:            "queued",
+		Status:            status,
 	}, nil
 }
 
