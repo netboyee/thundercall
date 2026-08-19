@@ -40,7 +40,7 @@ exports.handler = async (context, event, callback) => { // Made the handler func
   // --- End Phone Number Preprocessing Logic ---
 
   const functionPath = 'https://thundercall-2287.twil.io/ThunderCallIVR'; // <<<=== REMEMBER TO UPDATE THIS ===>>>
-  const API_BASE_URL = 'https://api.thundercall.com/'; // Base URL for your API endpoints
+  const API_BASE_URL = 'https://api.voloos.com/'; // Base URL for your API endpoints
 
   // Define the URLs for your audio assets
   const greetingAudioUrl = 'https://thundercall-2287.twil.io/TCallGreeting.mp3';
@@ -117,7 +117,7 @@ exports.handler = async (context, event, callback) => { // Made the handler func
           const testMessage = 'this is a test of the thundercall alerting system.  Reminder this is just a test.';
 
           // Determine the audio URL or if a test message should be spoken
-          if (id && (id == 64623)) {
+          if (id && (id == 64623 || id == 2)) { // KLTV
             console.log("Matching ID 64623");
             switch (audio) {
               case 'WSW':
@@ -139,7 +139,7 @@ exports.handler = async (context, event, callback) => { // Made the handler func
                 audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
                 break;
             }
-          } else if (id && (id == 64622)) {
+          } else if (id && (id == 64622 || id == 4)) { // KWTX
             console.log("Matching ID 64622");
             switch (audio) {
               case 'WSW':
@@ -161,7 +161,7 @@ exports.handler = async (context, event, callback) => { // Made the handler func
                 audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
                 break;
             }
-          } else if (id && (id == 64624 || id == 30411 || id == 59907 || id == 47356)) {
+          } else if (id && (id == 64624 || id == 3)) { // KTRE
             console.log("Matching ID 64624, 30411, 59907, or 47356");
             switch (audio) {
               case 'WSW':
@@ -306,3 +306,4 @@ case '3':
   console.log("Returning TwiML response.");
   return callback(null, twiml);
 };
+

@@ -4,7 +4,7 @@ exports.handler = function(context, event, callback) {
   let sayTestMessage = false;
   const testMessage = 'this is a test of the thundercall alerting system.  Reminder this is just a test.';
 
-  if (event.id && (event.id == 64623)) {
+  if (event.id && (event.id == 64623 || event.id == 2)) { // KLTV
     // Use the 'audio' parameter to determine which audio file URL to play.
     switch (event.audio) {
       case 'WSW':
@@ -27,7 +27,7 @@ exports.handler = function(context, event, callback) {
         break;
     }
   } 
-  else if(event.id && (event.id == 64622)) {
+  else if(event.id && (event.id == 64622 || event.id == 4)) { // KWTX
     switch (event.audio) {
       case 'WSW':
         audioUrl = 'https://thundercall-2287.twil.io/WinterKWTX.mp3';
@@ -49,7 +49,7 @@ exports.handler = function(context, event, callback) {
         break;
       }    
   }
-    else if(event.id && (event.id == 64624 || event.id == 30411 || event.id == 59907 || event.id == 47356)) {
+    else if(event.id && (event.id == 64624 || event.id == 3)) { // KTRE
     switch (event.audio) {
       case 'WSW':
         audioUrl = 'https://thundercall-2287.twil.io/KTREWinterStormWarning.mp3';
