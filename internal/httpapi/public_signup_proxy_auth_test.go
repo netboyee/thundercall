@@ -41,8 +41,8 @@ func TestHandlePublicSignupAcceptsSignedRequestWhenProxySecretConfigured(t *test
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, req)
 
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 after auth passes and handler reaches app config checks", recorder.Code)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 after auth passes and request validation runs", recorder.Code)
 	}
 }
 
@@ -80,16 +80,16 @@ func TestHandlePublicSignupRateLimitUsesTrustedProxyClientIP(t *testing.T) {
 	first.RemoteAddr = "203.0.113.10:1234"
 	firstRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(firstRecorder, first)
-	if firstRecorder.Code != http.StatusInternalServerError {
-		t.Fatalf("first status = %d, want 500", firstRecorder.Code)
+	if firstRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("first status = %d, want 400", firstRecorder.Code)
 	}
 
 	second := signedPublicSignupRequest(now, "198.51.100.11")
 	second.RemoteAddr = "203.0.113.10:1234"
 	secondRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(secondRecorder, second)
-	if secondRecorder.Code != http.StatusInternalServerError {
-		t.Fatalf("second status = %d, want 500 for different trusted client", secondRecorder.Code)
+	if secondRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("second status = %d, want 400 for different trusted client", secondRecorder.Code)
 	}
 
 	third := signedPublicSignupRequest(now, "198.51.100.10")

@@ -41,6 +41,18 @@ var legacyPublicSignupSupportedMessageTypes = []string{
 	"freeze_warning",
 }
 
+type publicSignupRequest struct {
+	ExternalID   string         `json:"externalId"`
+	AccountID    int64          `json:"accountId"`
+	FirstName    string         `json:"firstName"`
+	LastName     string         `json:"lastName"`
+	Title        string         `json:"title"`
+	EmailAddress string         `json:"emailAddress"`
+	PhoneNumber  string         `json:"phoneNumber"`
+	Address      addressRequest `json:"address"`
+	WarningTypes []int          `json:"warningTypes"`
+}
+
 type legacyPublicSignupRequest struct {
 	ExternalID  string                      `json:"externalId"`
 	AccountID   int64                       `json:"accountId"`
@@ -106,28 +118,33 @@ type createResolvedUserInput struct {
 }
 
 func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
-	writePublicSignupCORSHeaders(w)
+	body, ok := s.preparePublicSignup(w, r)
+	if !ok {
+		return
+	}
 
-	defer r.Body.Close()
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
+	var request publicSignupRequest
+	if err := decodeJSONBytes(body, &request); err != nil {
 		writePublicSignupError(w, http.StatusBadRequest, "Invalid JSON body.")
 		return
 	}
+	if request.AccountID <= 0 {
+		writePublicSignupError(w, http.StatusBadRequest, "Account ID required")
+		return
+	}
 
-	proxyAuth, err := s.validatePublicSignupProxyRequest(r, body)
+	input, err := request.toCreateResolvedUserInput()
 	if err != nil {
-		writePublicSignupError(w, http.StatusUnauthorized, "Unauthorized.")
+		writePublicSignupError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if !s.allowPublicSignupRequest(w, r, proxyAuth.clientID) {
-		return
-	}
+	s.completePublicSignup(w, r, request.AccountID, input)
+}
 
-	if s.db == nil || s.resolver == nil || s.accounts == nil {
-		writePublicSignupError(w, http.StatusInternalServerError, "Public signup is not configured.")
+func (s *Server) handleLegacyPublicSignup(w http.ResponseWriter, r *http.Request) {
+	body, ok := s.preparePublicSignup(w, r)
+	if !ok {
 		return
 	}
 
@@ -147,7 +164,40 @@ func (s *Server) handlePublicSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account, err := s.resolvePublicSignupAccount(r.Context(), request.AccountID)
+	s.completePublicSignup(w, r, request.AccountID, input)
+}
+
+func (s *Server) preparePublicSignup(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	writePublicSignupCORSHeaders(w)
+
+	defer r.Body.Close()
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writePublicSignupError(w, http.StatusBadRequest, "Invalid JSON body.")
+		return nil, false
+	}
+
+	proxyAuth, err := s.validatePublicSignupProxyRequest(r, body)
+	if err != nil {
+		writePublicSignupError(w, http.StatusUnauthorized, "Unauthorized.")
+		return nil, false
+	}
+
+	if !s.allowPublicSignupRequest(w, r, proxyAuth.clientID) {
+		return nil, false
+	}
+
+	return body, true
+}
+
+func (s *Server) completePublicSignup(w http.ResponseWriter, r *http.Request, accountID int64, input createResolvedUserInput) {
+	if s.db == nil || s.resolver == nil || s.accounts == nil {
+		writePublicSignupError(w, http.StatusInternalServerError, "Public signup is not configured.")
+		return
+	}
+
+	account, err := s.resolvePublicSignupAccount(r.Context(), accountID)
 	if err != nil {
 		writePublicSignupError(w, http.StatusInternalServerError, "Failed to resolve account.")
 		return
@@ -251,6 +301,51 @@ func writePublicSignupError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
+func (r publicSignupRequest) toCreateResolvedUserInput() (createResolvedUserInput, error) {
+	if strings.TrimSpace(r.FirstName) == "" {
+		return createResolvedUserInput{}, errors.New("First name required")
+	}
+	if strings.TrimSpace(r.LastName) == "" {
+		return createResolvedUserInput{}, errors.New("Last name required")
+	}
+
+	email := strings.TrimSpace(r.EmailAddress)
+	if email == "" {
+		return createResolvedUserInput{}, errors.New("Email address required")
+	}
+
+	voicePhone, err := normalizePublicSignupPhone(r.PhoneNumber)
+	if err != nil {
+		return createResolvedUserInput{}, err
+	}
+
+	address, err := normalizePublicSignupAddress(r.Address)
+	if err != nil {
+		return createResolvedUserInput{}, err
+	}
+	if len(r.WarningTypes) == 0 {
+		return createResolvedUserInput{}, errors.New("At least one warning must be selected")
+	}
+
+	voiceSettings, err := legacyVoiceSettingsFromWarningTypes(r.WarningTypes)
+	if err != nil {
+		return createResolvedUserInput{}, err
+	}
+
+	return createResolvedUserInput{
+		ExternalID:        strings.TrimSpace(r.ExternalID),
+		FirstName:         strings.TrimSpace(r.FirstName),
+		LastName:          strings.TrimSpace(r.LastName),
+		Title:             strings.TrimSpace(r.Title),
+		VoicePhone:        voicePhone,
+		EmailAddress:      strings.ToLower(email),
+		SubscriptionType:  "address",
+		IsPrimaryLocation: boolPtr(true),
+		Address:           address,
+		VoiceSettings:     voiceSettings,
+	}, nil
+}
+
 func (r legacyPublicSignupRequest) toCreateResolvedUserInput() (createResolvedUserInput, error) {
 	if strings.TrimSpace(r.FirstName) == "" {
 		return createResolvedUserInput{}, errors.New("First name required")
@@ -318,6 +413,29 @@ func firstNonBlankPhone(values []legacyPublicSignupPhone) string {
 		}
 	}
 	return ""
+}
+
+func normalizePublicSignupAddress(address addressRequest) (addressRequest, error) {
+	if strings.TrimSpace(address.Line1) == "" {
+		return addressRequest{}, errors.New("Address required")
+	}
+	if strings.TrimSpace(address.City) == "" {
+		return addressRequest{}, errors.New("City required")
+	}
+	if strings.TrimSpace(address.StateCode) == "" {
+		return addressRequest{}, errors.New("State Required")
+	}
+	if strings.TrimSpace(address.PostalCode) == "" {
+		return addressRequest{}, errors.New("Zip Code Required")
+	}
+
+	return addressRequest{
+		Line1:      strings.TrimSpace(address.Line1),
+		Line2:      strings.TrimSpace(address.Line2),
+		City:       strings.TrimSpace(address.City),
+		StateCode:  strings.ToUpper(strings.TrimSpace(address.StateCode)),
+		PostalCode: strings.TrimSpace(address.PostalCode),
+	}, nil
 }
 
 func firstSignupAddress(values []legacyPublicSignupAddress) (addressRequest, []int, error) {

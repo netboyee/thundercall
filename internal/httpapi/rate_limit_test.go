@@ -66,8 +66,8 @@ func TestPublicSignupRateLimitReturnsTooManyRequests(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, req)
 
-		if recorder.Code != http.StatusInternalServerError {
-			t.Fatalf("request %d status = %d, want 500 before limit is exceeded", i+1, recorder.Code)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("request %d status = %d, want 400 before limit is exceeded", i+1, recorder.Code)
 		}
 	}
 
@@ -105,8 +105,8 @@ func TestPublicSignupRateLimitIsSharedAcrossAliasRoutesPerClient(t *testing.T) {
 	first.Header.Set("CF-Connecting-IP", "198.51.100.33")
 	firstRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(firstRecorder, first)
-	if firstRecorder.Code != http.StatusInternalServerError {
-		t.Fatalf("first request status = %d, want 500", firstRecorder.Code)
+	if firstRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("first request status = %d, want 400", firstRecorder.Code)
 	}
 
 	second := httptest.NewRequest(http.MethodPost, "/v1/public/signups", strings.NewReader(`{}`))
@@ -123,7 +123,7 @@ func TestPublicSignupRateLimitIsSharedAcrossAliasRoutesPerClient(t *testing.T) {
 	otherClient.Header.Set("CF-Connecting-IP", "198.51.100.34")
 	otherRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(otherRecorder, otherClient)
-	if otherRecorder.Code != http.StatusInternalServerError {
-		t.Fatalf("other client status = %d, want 500", otherRecorder.Code)
+	if otherRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("other client status = %d, want 400", otherRecorder.Code)
 	}
 }

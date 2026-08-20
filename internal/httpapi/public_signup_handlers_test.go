@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,28 +70,22 @@ func TestNormalizePublicSignupPhone(t *testing.T) {
 	}
 }
 
-func TestLegacyPublicSignupRequestToCreateResolvedUserInput(t *testing.T) {
-	request := legacyPublicSignupRequest{
-		ExternalID: "RD1234567",
-		AccountID:  2,
-		FirstName:  "Pat",
-		LastName:   "Smith",
-		Title:      "Parent",
-		Emails: []legacyPublicSignupEmail{{
-			EmailAddress: "PAT@example.com",
-		}},
-		Phones: []legacyPublicSignupPhone{{
-			PhoneNumber: "407-353-0340",
-		}},
-		Addresses: []legacyPublicSignupAddress{{
-			Address:       "123 Main St",
-			City:          "Tyler",
-			StateProvince: "tx",
-			ZipPostalCode: "75701",
-			ThunderCall: legacyPublicSignupThunderCall{
-				WarningTypes: []int{0, 1},
-			},
-		}},
+func TestPublicSignupRequestToCreateResolvedUserInput(t *testing.T) {
+	request := publicSignupRequest{
+		ExternalID:   "RD1234567",
+		AccountID:    2,
+		FirstName:    "Pat",
+		LastName:     "Smith",
+		Title:        "Parent",
+		EmailAddress: "PAT@example.com",
+		PhoneNumber:  "407-353-0340",
+		Address: addressRequest{
+			Line1:      "123 Main St",
+			City:       "Tyler",
+			StateCode:  "tx",
+			PostalCode: "75701",
+		},
+		WarningTypes: []int{0, 1},
 	}
 
 	input, err := request.toCreateResolvedUserInput()
@@ -98,9 +93,6 @@ func TestLegacyPublicSignupRequestToCreateResolvedUserInput(t *testing.T) {
 		t.Fatalf("toCreateResolvedUserInput() error = %v", err)
 	}
 
-	if input.DisplayName != "Pat Smith" {
-		t.Fatalf("DisplayName = %q, want %q", input.DisplayName, "Pat Smith")
-	}
 	if input.EmailAddress != "pat@example.com" {
 		t.Fatalf("EmailAddress = %q, want pat@example.com", input.EmailAddress)
 	}
@@ -115,6 +107,34 @@ func TestLegacyPublicSignupRequestToCreateResolvedUserInput(t *testing.T) {
 	}
 	if input.VoiceSettings["severe_thunderstorm_warning"] {
 		t.Fatalf("expected unselected warning setting to be disabled: %#v", input.VoiceSettings)
+	}
+}
+
+func TestHandlePublicSignupRejectsLegacyOnlyFields(t *testing.T) {
+	server := NewServer(nil, time.Hour, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/users/signup", strings.NewReader(`{
+		"accountId": 2,
+		"firstName": "Pat",
+		"lastName": "Smith",
+		"emailAddress": "pat@example.com",
+		"phoneNumber": "4073530340",
+		"address": {
+			"line1": "123 Main St",
+			"city": "Tyler",
+			"stateCode": "TX",
+			"postalCode": "75701"
+		},
+		"warningTypes": [0],
+		"displayName": "Pat Smith"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 response, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

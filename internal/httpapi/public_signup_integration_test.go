@@ -45,7 +45,7 @@ func TestHandlePublicSignupCreatesUserLocationContactsAndSettings(t *testing.T) 
 		},
 	})
 
-	payload := legacyPublicSignupRequest{
+	payload := publicSignupRequestFromLegacy(t, legacyPublicSignupRequest{
 		ExternalID: "RD1234567",
 		AccountID:  account.ID,
 		FirstName:  "Pat",
@@ -71,7 +71,7 @@ func TestHandlePublicSignupCreatesUserLocationContactsAndSettings(t *testing.T) 
 		}},
 		LocationIDs: []int64{64623},
 		TCall:       true,
-	}
+	})
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -253,6 +253,61 @@ func TestHandlePublicSignupReusesUserAndLocationForSamePhoneAndGeocodedAddress(t
 
 	assertUserSetting(t, harness.DB, users[0].ID, "tornado_warning", false)
 	assertUserSetting(t, harness.DB, users[0].ID, "flash_flood_warning", true)
+}
+
+func TestHandleLegacyPublicSignupRouteStillAcceptsLegacyPayload(t *testing.T) {
+	harness := testmysql.Open(t)
+	ctx := context.Background()
+
+	account := &models.Account{Name: "KWTX", Active: true}
+	if err := accountsrepo.New(harness.DB).Create(ctx, account); err != nil {
+		t.Fatalf("Create(account) error = %v", err)
+	}
+
+	server := NewServer(harness.DB, time.Hour, stubPublicSignupResolver{
+		resolved: geocode.ResolvedLocation{
+			MatchedAddress: "123 FIRST STREET, WACO, TX, 76701",
+			Latitude:       31.5493,
+			Longitude:      -97.1467,
+			CountyFIPS:     "TXC309",
+			NWSZone:        "TXZ111",
+		},
+	})
+
+	payload := legacyPublicSignupRequest{
+		ExternalID: "RD1000999",
+		AccountID:  account.ID,
+		FirstName:  "Ernie",
+		LastName:   "Lyon",
+		Emails: []legacyPublicSignupEmail{{
+			EmailAddress: "ernie@example.com",
+		}},
+		Phones: []legacyPublicSignupPhone{{
+			PhoneNumber: "4073530340",
+		}},
+		Addresses: []legacyPublicSignupAddress{{
+			Address:       "123 First St",
+			City:          "Waco",
+			StateProvince: "TX",
+			ZipPostalCode: "76701",
+			ThunderCall:   legacyPublicSignupThunderCall{WarningTypes: []int{0}},
+		}},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal(payload) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/products/64623/records", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 response, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestHandlePublicSignupReusesUserAndAddsLocationForDifferentGeocodedAddress(t *testing.T) {
@@ -711,7 +766,7 @@ func postPublicSignup(t *testing.T, server *Server, payload legacyPublicSignupRe
 func postPublicSignupExpect(t *testing.T, server *Server, payload legacyPublicSignupRequest, wantStatus int) *httptest.ResponseRecorder {
 	t.Helper()
 
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(publicSignupRequestFromLegacy(t, payload))
 	if err != nil {
 		t.Fatalf("Marshal(payload) error = %v", err)
 	}
@@ -727,6 +782,29 @@ func postPublicSignupExpect(t *testing.T, server *Server, payload legacyPublicSi
 	}
 
 	return recorder
+}
+
+func publicSignupRequestFromLegacy(t *testing.T, payload legacyPublicSignupRequest) publicSignupRequest {
+	t.Helper()
+
+	address, warningTypes, err := firstSignupAddress(payload.Addresses)
+	if err != nil {
+		t.Fatalf("firstSignupAddress() error = %v", err)
+	}
+
+	request := publicSignupRequest{
+		ExternalID:   payload.ExternalID,
+		AccountID:    payload.AccountID,
+		FirstName:    payload.FirstName,
+		LastName:     payload.LastName,
+		Title:        payload.Title,
+		EmailAddress: firstNonBlankEmail(payload.Emails),
+		PhoneNumber:  firstNonBlankPhone(payload.Phones),
+		Address:      address,
+		WarningTypes: warningTypes,
+	}
+
+	return request
 }
 
 func assertUserSetting(t *testing.T, db *sql.DB, userID int64, messageType string, want bool) {

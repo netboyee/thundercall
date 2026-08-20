@@ -728,7 +728,7 @@ user and location, and stores per-alert voice preferences from the
 Notes:
 
 - authentication is not required for legacy-compatible callers
-- the same handler is also available at `POST /api/products/{productId}/records` and `POST /v1/public/signups`
+- `POST /api/products/{productId}/records` and `POST /v1/public/signups` remain available for the legacy station-signup payload during cutover
 - responses from this endpoint use a top-level `message` field for compatibility with the legacy form
 - the handler is rate-limited per client IP and returns `429 Too Many Requests`
   plus `Retry-After` when the configured limit is exceeded
@@ -751,47 +751,24 @@ Request body:
   "firstName": "Pat",
   "lastName": "Smith",
   "title": "",
-  "tcall": true,
-  "emails": [
-    {
-      "emailAddress": "pat@example.com",
-      "emailType": "Home"
-    }
-  ],
-  "phones": [
-    {
-      "phoneNumber": "4073530340",
-      "extension": "",
-      "phoneType": "Home"
-    }
-  ],
-  "addresses": [
-    {
-      "address": "123 Main St",
-      "address2": "",
-      "city": "Tyler",
-      "stateProvince": "TX",
-      "zipPostalCode": "75701",
-      "country": "US",
-      "addressType": "Home",
-      "thundercall": {
-        "phoneSetting": {
-          "name": "Home",
-          "phoneType": "Home",
-          "email": 0,
-          "enableText": false
-        },
-        "warningTypes": [0, 2]
-      }
-    }
-  ]
+  "emailAddress": "pat@example.com",
+  "phoneNumber": "4073530340",
+  "address": {
+    "line1": "123 Main St",
+    "line2": "",
+    "city": "Tyler",
+    "stateCode": "TX",
+    "postalCode": "75701"
+  },
+  "warningTypes": [0, 2]
 }
 ```
 
 Notes:
 
 - `accountId` is the new ThunderCall account id for the station receiving signups
-- `companyId` is tolerated for compatibility with the existing form payload but is ignored by the new API
+- `displayName` is derived from `firstName` and `lastName`
+- only fields persisted by ThunderCall are accepted on this endpoint; legacy-only fields such as `tcall`, `displayName`, `emailType`, `phoneType`, `addressType`, `phoneSetting`, and `locationIds` are rejected here
 
 Warning type mapping:
 

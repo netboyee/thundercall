@@ -1,0 +1,670 @@
+{
+  "info": {
+    "name": "ThunderCall API",
+    "_postman_id": "1b0b63c0-21f0-49cc-a0d6-6af7f33fbd70",
+    "description": "Importable Postman collection for the ThunderCall API. It includes authenticated API routes, the public signup compatibility routes, and a Twilio voice status callback request with a working signature pre-request script.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{bearerToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.thundercall.com"
+    },
+    {
+      "key": "bearerToken",
+      "value": ""
+    },
+    {
+      "key": "authEmail",
+      "value": "admin@example.com"
+    },
+    {
+      "key": "authPassword",
+      "value": "change-me"
+    },
+    {
+      "key": "accountId",
+      "value": "1"
+    },
+    {
+      "key": "productId",
+      "value": "1"
+    },
+    {
+      "key": "messageId",
+      "value": "1"
+    },
+    {
+      "key": "locationId",
+      "value": "1"
+    },
+    {
+      "key": "signupSharedSecret",
+      "value": ""
+    },
+    {
+      "key": "signupTimestamp",
+      "value": ""
+    },
+    {
+      "key": "signupSignature",
+      "value": ""
+    },
+    {
+      "key": "signupClientIp",
+      "value": "203.0.113.10"
+    },
+    {
+      "key": "twilioAuthToken",
+      "value": ""
+    },
+    {
+      "key": "twilioVoiceStatusCallbackUrl",
+      "value": "https://api.thundercall.com/api/providers/twilio/voice/status"
+    },
+    {
+      "key": "twilioSignature",
+      "value": ""
+    },
+    {
+      "key": "twilioCallSid",
+      "value": "CA1234567890abcdef1234567890abcdef"
+    },
+    {
+      "key": "twilioCallStatus",
+      "value": "completed"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /healthz",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/healthz",
+            "description": "Basic health check for the API container."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /v1/auth/login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login succeeded', function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "if (json && json.token) {",
+                  "  pm.collectionVariables.set('bearerToken', json.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{authEmail}}\",\n  \"password\": \"{{authPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v1/auth/login",
+            "description": "Logs in and stores the returned bearer token in the collection variable `bearerToken`."
+          }
+        },
+        {
+          "name": "GET /v1/auth/me",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/auth/me",
+            "description": "Returns the currently authenticated user."
+          }
+        },
+        {
+          "name": "POST /v1/auth/logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('logout succeeded', function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 204]);",
+                  "});",
+                  "",
+                  "pm.collectionVariables.unset('bearerToken');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/auth/logout",
+            "description": "Logs out the current session and clears the collection bearer token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "GET /v1/dashboard/summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/dashboard/summary",
+            "description": "Returns the top-level dashboard summary for the authenticated account."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "item": [
+        {
+          "name": "GET /v1/messages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages?limit=50&offset=0",
+            "description": "Lists messages for the authenticated account. Supported filters include `eventCode`, `source`, `status`, `from`, and `to`."
+          }
+        },
+        {
+          "name": "GET /v1/messages/{id}",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/{{messageId}}",
+            "description": "Fetches one message by ID."
+          }
+        },
+        {
+          "name": "POST /v1/messages/lookup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"address\": {\n    \"line1\": \"4368 Berry Oak Dr\",\n    \"line2\": \"\",\n    \"city\": \"Apopka\",\n    \"stateCode\": \"FL\",\n    \"postalCode\": \"32712\"\n  },\n  \"limit\": 50,\n  \"offset\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v1/messages/lookup",
+            "description": "Finds messages affecting a given address or lat/lon point. Send either `address` or `latitude` + `longitude`."
+          }
+        },
+        {
+          "name": "GET /v1/messages/{id}/locations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/{{messageId}}/locations",
+            "description": "Returns the locations matched to a given message."
+          }
+        },
+        {
+          "name": "GET /v1/messages/{id}/deliveries",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/{{messageId}}/deliveries?limit=50&offset=0",
+            "description": "Lists per-recipient deliveries for a message."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Locations",
+      "item": [
+        {
+          "name": "GET /v1/locations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/locations?limit=50&offset=0",
+            "description": "Lists locations for the authenticated account."
+          }
+        },
+        {
+          "name": "GET /v1/locations/{id}",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/locations/{{locationId}}",
+            "description": "Fetches one location by ID."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "POST /v1/users",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"externalId\": \"PM-{{$timestamp}}\",\n  \"firstName\": \"Ernie\",\n  \"lastName\": \"Lyon\",\n  \"displayName\": \"Ernie Lyon\",\n  \"title\": \"\",\n  \"voicePhone\": \"+14075550123\",\n  \"locationName\": \"Home\",\n  \"subscriptionType\": \"default\",\n  \"isPrimaryLocation\": true,\n  \"address\": {\n    \"line1\": \"4368 Berry Oak Dr\",\n    \"line2\": \"\",\n    \"city\": \"Apopka\",\n    \"stateCode\": \"FL\",\n    \"postalCode\": \"32712\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v1/users",
+            "description": "Creates a user, geocodes the supplied address, enriches it with county FIPS and NWS zone, and creates the initial subscription."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Public Signup",
+      "item": [
+        {
+          "name": "POST /v1/public/signups",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('signupSharedSecret') || pm.environment.get('signupSharedSecret') || '';",
+                  "const timestamp = new Date().toISOString();",
+                  "const method = pm.request.method.toUpperCase();",
+                  "const path = '/' + pm.request.url.path.map(function (segment) {",
+                  "  return pm.variables.replaceIn(segment);",
+                  "}).join('/');",
+                  "const rawBody = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+                  "const payload = [method, path, timestamp, rawBody].join('\\n');",
+                  "const signature = secret ? CryptoJS.HmacSHA256(payload, secret).toString(CryptoJS.enc.Hex) : '';",
+                  "",
+                  "pm.collectionVariables.set('signupTimestamp', timestamp);",
+                  "pm.collectionVariables.set('signupSignature', signature);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Thundercall-Signup-Timestamp",
+                "value": "{{signupTimestamp}}"
+              },
+              {
+                "key": "X-Thundercall-Signup-Signature",
+                "value": "{{signupSignature}}"
+              },
+              {
+                "key": "X-Thundercall-Client-IP",
+                "value": "{{signupClientIp}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"externalId\": \"PM-{{$timestamp}}\",\n  \"accountId\": {{accountId}},\n  \"companyId\": 690,\n  \"firstName\": \"Ernie\",\n  \"lastName\": \"Lyon\",\n  \"displayName\": \"Ernie Lyon\",\n  \"title\": \"\",\n  \"tcall\": true,\n  \"emails\": [\n    {\n      \"emailAddress\": \"ernie@example.com\",\n      \"emailType\": \"0\"\n    }\n  ],\n  \"phones\": [\n    {\n      \"phoneNumber\": \"4073530340\",\n      \"extension\": \"\",\n      \"phoneType\": \"0\"\n    }\n  ],\n  \"addresses\": [\n    {\n      \"address\": \"4368 Berry Oak Dr\",\n      \"address2\": \"\",\n      \"city\": \"Apopka\",\n      \"stateProvince\": \"FL\",\n      \"zipPostalCode\": \"32712\",\n      \"country\": \"US\",\n      \"addressType\": \"0\",\n      \"thundercall\": {\n        \"phoneSetting\": {\n          \"name\": \"Ernie Lyon\",\n          \"phoneType\": \"0\",\n          \"email\": 0,\n          \"enableText\": false\n        },\n        \"warningTypes\": [0, 1, 2, 3]\n      }\n    }\n  ],\n  \"locationIds\": [{{locationId}}]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v1/public/signups",
+            "description": "Primary public signup endpoint used by the new signup forms. If `signupSharedSecret` is configured on the API, the pre-request script computes the required HMAC signature automatically."
+          }
+        },
+        {
+          "name": "POST /api/users/signup",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('signupSharedSecret') || pm.environment.get('signupSharedSecret') || '';",
+                  "const timestamp = new Date().toISOString();",
+                  "const method = pm.request.method.toUpperCase();",
+                  "const path = '/' + pm.request.url.path.map(function (segment) {",
+                  "  return pm.variables.replaceIn(segment);",
+                  "}).join('/');",
+                  "const rawBody = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+                  "const payload = [method, path, timestamp, rawBody].join('\\n');",
+                  "const signature = secret ? CryptoJS.HmacSHA256(payload, secret).toString(CryptoJS.enc.Hex) : '';",
+                  "",
+                  "pm.collectionVariables.set('signupTimestamp', timestamp);",
+                  "pm.collectionVariables.set('signupSignature', signature);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Thundercall-Signup-Timestamp",
+                "value": "{{signupTimestamp}}"
+              },
+              {
+                "key": "X-Thundercall-Signup-Signature",
+                "value": "{{signupSignature}}"
+              },
+              {
+                "key": "X-Thundercall-Client-IP",
+                "value": "{{signupClientIp}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"externalId\": \"PM-{{$timestamp}}\",\n  \"accountId\": {{accountId}},\n  \"firstName\": \"Ernie\",\n  \"lastName\": \"Lyon\",\n  \"title\": \"\",\n  \"emailAddress\": \"ernie@example.com\",\n  \"phoneNumber\": \"4073530340\",\n  \"address\": {\n    \"line1\": \"4368 Berry Oak Dr\",\n    \"line2\": \"\",\n    \"city\": \"Apopka\",\n    \"stateCode\": \"FL\",\n    \"postalCode\": \"32712\"\n  },\n  \"warningTypes\": [0, 1, 2, 3]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/users/signup",
+            "description": "ThunderCall public signup endpoint with the slim request body used by the new signup form. Legacy signup fields such as `displayName`, `tcall`, typed contact metadata, `phoneSetting`, and `locationIds` are not accepted here."
+          }
+        },
+        {
+          "name": "POST /api/products/{productId}/records",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('signupSharedSecret') || pm.environment.get('signupSharedSecret') || '';",
+                  "const timestamp = new Date().toISOString();",
+                  "const method = pm.request.method.toUpperCase();",
+                  "const path = '/' + pm.request.url.path.map(function (segment) {",
+                  "  return pm.variables.replaceIn(segment);",
+                  "}).join('/');",
+                  "const rawBody = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+                  "const payload = [method, path, timestamp, rawBody].join('\\n');",
+                  "const signature = secret ? CryptoJS.HmacSHA256(payload, secret).toString(CryptoJS.enc.Hex) : '';",
+                  "",
+                  "pm.collectionVariables.set('signupTimestamp', timestamp);",
+                  "pm.collectionVariables.set('signupSignature', signature);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Thundercall-Signup-Timestamp",
+                "value": "{{signupTimestamp}}"
+              },
+              {
+                "key": "X-Thundercall-Signup-Signature",
+                "value": "{{signupSignature}}"
+              },
+              {
+                "key": "X-Thundercall-Client-IP",
+                "value": "{{signupClientIp}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"externalId\": \"PM-{{$timestamp}}\",\n  \"accountId\": {{accountId}},\n  \"companyId\": 690,\n  \"firstName\": \"Ernie\",\n  \"lastName\": \"Lyon\",\n  \"displayName\": \"Ernie Lyon\",\n  \"title\": \"\",\n  \"tcall\": true,\n  \"emails\": [\n    {\n      \"emailAddress\": \"ernie@example.com\",\n      \"emailType\": \"0\"\n    }\n  ],\n  \"phones\": [\n    {\n      \"phoneNumber\": \"4073530340\",\n      \"extension\": \"\",\n      \"phoneType\": \"0\"\n    }\n  ],\n  \"addresses\": [\n    {\n      \"address\": \"4368 Berry Oak Dr\",\n      \"address2\": \"\",\n      \"city\": \"Apopka\",\n      \"stateProvince\": \"FL\",\n      \"zipPostalCode\": \"32712\",\n      \"country\": \"US\",\n      \"addressType\": \"0\",\n      \"thundercall\": {\n        \"phoneSetting\": {\n          \"name\": \"Ernie Lyon\",\n          \"phoneType\": \"0\",\n          \"email\": 0,\n          \"enableText\": false\n        },\n        \"warningTypes\": [0, 1, 2, 3]\n      }\n    }\n  ],\n  \"locationIds\": [{{locationId}}]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/products/{{productId}}/records",
+            "description": "Legacy product/records compatibility endpoint used by older signup forms."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Providers",
+      "item": [
+        {
+          "name": "POST /api/providers/twilio/voice/status",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const authToken = pm.collectionVariables.get('twilioAuthToken') || pm.environment.get('twilioAuthToken') || '';",
+                  "const requestUrl = pm.variables.replaceIn(pm.request.url.toString());",
+                  "const values = {};",
+                  "",
+                  "if (pm.request.body && pm.request.body.urlencoded) {",
+                  "  pm.request.body.urlencoded.each(function (item) {",
+                  "    if (item.disabled) {",
+                  "      return;",
+                  "    }",
+                  "    const key = item.key;",
+                  "    const value = pm.variables.replaceIn(item.value || '');",
+                  "    if (!values[key]) {",
+                  "      values[key] = [];",
+                  "    }",
+                  "    values[key].push(value);",
+                  "  });",
+                  "}",
+                  "",
+                  "let data = requestUrl;",
+                  "Object.keys(values).sort().forEach(function (key) {",
+                  "  values[key].forEach(function (value) {",
+                  "    data += key + value;",
+                  "  });",
+                  "});",
+                  "",
+                  "const signature = authToken ? CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA1(data, authToken)) : '';",
+                  "pm.collectionVariables.set('twilioSignature', signature);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              },
+              {
+                "key": "X-Twilio-Signature",
+                "value": "{{twilioSignature}}"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "CallSid",
+                  "value": "{{twilioCallSid}}",
+                  "type": "text"
+                },
+                {
+                  "key": "CallStatus",
+                  "value": "{{twilioCallStatus}}",
+                  "type": "text"
+                },
+                {
+                  "key": "AnsweredBy",
+                  "value": "human",
+                  "type": "text"
+                },
+                {
+                  "key": "CallDuration",
+                  "value": "32",
+                  "type": "text"
+                },
+                {
+                  "key": "ErrorCode",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "SipResponseCode",
+                  "value": "200",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{twilioVoiceStatusCallbackUrl}}",
+            "description": "Simulates a Twilio voice status callback. The pre-request script computes `X-Twilio-Signature` from `twilioAuthToken`."
+          }
+        }
+      ]
+    }
+  ]
+}
