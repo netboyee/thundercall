@@ -1,309 +1,239 @@
 /**
- * Main handler for the Twilio Function.
- * This function processes incoming calls and handles digit presses for an IVR menu.
+ * Main handler for the Twilio IVR.
+ * This function plays the latest alert for the caller, records callback
+ * feedback, or opts the caller out of future ThunderCall voice alerts.
  *
- * @param {object} context - Twilio context object, contains environment variables.
- * @param {object} event - Twilio event object, contains call details and input digits.
- * @param {function} callback - Callback function to return the TwiML response.
+ * Expected API endpoints:
+ * - GET /api/users/messages/last?phoneNumber=<10-digit-number>
+ * - GET /api/users/voice/opt-out?phoneNumber=<10-digit-number>
  */
-exports.handler = async (context, event, callback) => { // Made the handler function asynchronous
-  // Log the very first entry point of the function
-  console.log("--- Twilio Function Invoked ---");
-  console.log("Event received:", event);
+exports.handler = async (context, event, callback) => {
+  console.log('--- ThunderCallIVR invoked ---');
+  console.log('Event received:', event);
 
-  // Create a new voice response object
   const twiml = new Twilio.twiml.VoiceResponse();
-
-  // Extract call details from the event object
   const city = event.FromCity;
-  let number = event.From; // This will be used as the phoneNumber for API calls
+  const normalizedPhone = normalizePhoneNumber(event.From);
 
-  console.log(`Original Call from: ${number} (City: ${city || 'Unknown'})`);
+  console.log(`Original call from: ${event.From || 'Unknown'} (City: ${city || 'Unknown'})`);
+  console.log(`Normalized caller phone number: ${normalizedPhone || 'Unavailable'}`);
 
-  // --- Phone Number Preprocessing Logic ---
-  // First, remove the leading '+' sign if present
-  if (number && number.startsWith('+')) {
-    const originalNumberWithPlus = number; // Store original for logging
-    number = number.substring(1); // Remove the leading '+'
-    console.log(`Removed leading '+': ${originalNumberWithPlus} -> ${number}`);
-  }
+  const functionPath = context.TWILIO_IVR_URL || 'https://thundercall-2287.twil.io/ThunderCallIVR';
+  const apiBaseUrl = (context.API_BASE_URL || 'https://api.thundercall.com').replace(/\/+$/, '');
 
-  // Then, remove leading '1' if the number is 11 digits long and starts with '1'
-  if (number && number.length === 11 && number.startsWith('1')) {
-    const originalNumberForOneCheck = number; // Store original for logging
-    number = number.substring(1); // Remove the first character (the '1')
-    console.log(`Processed phone number (removed leading '1'): ${originalNumberForOneCheck} -> ${number}`);
-  } else {
-    // This log will only show if no '1' was removed after the optional '+' removal
-    console.log(`Phone number remains unchanged after all preprocessing: ${number}`);
-  }
-  // --- End Phone Number Preprocessing Logic ---
-
-  const functionPath = 'https://thundercall-2287.twil.io/ThunderCallIVR'; // <<<=== REMEMBER TO UPDATE THIS ===>>>
-  const API_BASE_URL = 'https://api.voloos.com/'; // Base URL for your API endpoints
-
-  // Define the URLs for your audio assets
   const greetingAudioUrl = 'https://thundercall-2287.twil.io/TCallGreeting.mp3';
   const mainMenuAudioUrl = 'https://thundercall-2287.twil.io/TCallMainMenu.mp3';
-  // These specific audio URLs are for the previous logic of type A, B, C.
-  // The new logic for case '1' uses different, specific URLs based on event.id and event.audio mapping.
-  const audioTypeAUrl = 'https://thundercall-2287.twil.io/TCall-A.mp3';
-  const audioTypeBUrl = 'https://thundercall-2287.twil.io/TCall-B.mp3';
-  const audioTypeCUrl = 'https://thundercall-2287.twil.io/TCall-C.mp3';
   const audioNoRecentUrl = 'https://thundercall-2287.twil.io/TCallNoRecent.mp3';
+  const defaultAudioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
+  const testMessage = 'this is a test of the thundercall alerting system. Reminder this is just a test.';
 
+  const stationAudioByAccountId = {
+    2: {
+      WSW: 'https://thundercall-2287.twil.io/thundercall%20winter.mp3',
+      FFW: 'https://thundercall-2287.twil.io/Thundercall%20flood.mp3',
+      TOR: 'https://thundercall-2287.twil.io/Thundercall%20Tornado.mp3',
+      SVR: 'https://thundercall-2287.twil.io/Thundercall%20Tstorm.mp3'
+    },
+    4: {
+      WSW: 'https://thundercall-2287.twil.io/WinterKWTX.mp3',
+      FFW: 'https://thundercall-2287.twil.io/FlashFloodKWTX.mp3',
+      TOR: 'https://thundercall-2287.twil.io/TornadoKWTX.mp3',
+      SVR: 'https://thundercall-2287.twil.io/SevereWeatherKWTX.mp3'
+    },
+    3: {
+      WSW: 'https://thundercall-2287.twil.io/KTREWinterStormWarning.mp3',
+      FFW: 'https://thundercall-2287.twil.io/KTREFloodWarning.mp3',
+      TOR: 'https://thundercall-2287.twil.io/KTRETornadoWarning.mp3',
+      SVR: 'https://thundercall-2287.twil.io/KTREThunderStormWarning.mp3'
+    }
+  };
 
-  /**
-   * Helper function to present the IVR menu options to the caller.
-   * It uses the <Gather> verb to collect a single digit input within a timeout.
-   * Now plays the main menu audio file instead of speaking the options.
-   */
+  const genericAudioByType = {
+    WSW: 'https://thundercall-2287.twil.io/GenericWinterStormWarning.mp3',
+    FFW: 'https://thundercall-2287.twil.io/GenericFlashFlood.mp3',
+    SVR: 'https://thundercall-2287.twil.io/GenericSevereStorm.mp3',
+    TOR: 'https://thundercall-2287.twil.io/GenericTornado.mp3'
+  };
+
   const presentMenu = () => {
-    console.log("Entering presentMenu function.");
-    // <Gather> collects digits pressed by the caller.
-    // numDigits: The number of digits to collect (here, 1 for single key presses).
-    // timeout: How long to wait for input (in seconds) after playing the Say/Play verbs.
-    // action: The URL to which Twilio will POST the collected digits (or if timed out).
-    //         We point it back to this same function to process the input.
+    console.log('Presenting main menu.');
+
     const gather = twiml.gather({
       numDigits: 1,
       timeout: 10,
       action: functionPath
     });
 
-    // Play the main menu audio file within the <Gather> block.
-    // This audio file should contain all the menu options (e.g., "Press 1 for Sales...").
-    gather.play({ loop: 1 }, mainMenuAudioUrl); // Play the main menu audio once
+    gather.play({ loop: 1 }, mainMenuAudioUrl);
     console.log(`Playing main menu audio: ${mainMenuAudioUrl}`);
 
-    // This <Say> verb will be executed if the <Gather> verb times out
-    // (caller doesn't press any digits after the menu audio plays).
     twiml.say('We did not receive any input. Goodbye.');
-    twiml.hangup(); // End the call if no input is received
-    console.log("Menu presented. If no input, will hangup.");
+    twiml.hangup();
   };
 
-  // Check if a digit has been pressed.
-  // The 'event.Digits' property will be present if Twilio has redirected the call
-  // to this function after a digit was pressed during a previous <Gather>.
+  const playLatestAlert = async () => {
+    if (!normalizedPhone) {
+      throw new Error('Caller phone number could not be normalized.');
+    }
+
+    const apiUrl = `${apiBaseUrl}/api/users/messages/last?phoneNumber=${encodeURIComponent(normalizedPhone)}`;
+    console.log(`Calling latest-message API: ${apiUrl}`);
+
+    const response = await fetch(apiUrl);
+    console.log(`Latest-message API response status: ${response.status}`);
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(`Latest-message API failed with status ${response.status}. Body: ${responseText}`);
+    }
+
+    const data = await response.json();
+    console.log('Latest-message API response body:', data);
+
+    if (!data.found) {
+      twiml.play(audioNoRecentUrl);
+      console.log(`No recent voice alert found. Playing: ${audioNoRecentUrl}`);
+      presentMenu();
+      return;
+    }
+
+    const accountId = Number(data.loc);
+    const audioType = String(data.type || '').trim().toUpperCase();
+    const playback = resolvePlayback(stationAudioByAccountId, genericAudioByType, accountId, audioType, defaultAudioUrl);
+
+    console.log(`Resolved playback for accountId=${accountId} audioType=${audioType}:`, playback);
+
+    if (playback.sayTestMessage) {
+      twiml.say(testMessage);
+      console.log(`Speaking test message: "${testMessage}"`);
+    } else {
+      twiml.play(playback.audioUrl);
+      console.log(`Playing alert audio: ${playback.audioUrl}`);
+    }
+
+    presentMenu();
+  };
+
+  const optOutCaller = async () => {
+    if (!normalizedPhone) {
+      throw new Error('Caller phone number could not be normalized.');
+    }
+
+    const apiUrl = `${apiBaseUrl}/api/users/voice/opt-out?phoneNumber=${encodeURIComponent(normalizedPhone)}`;
+    console.log(`Calling voice opt-out API: ${apiUrl}`);
+
+    const response = await fetch(apiUrl);
+    console.log(`Voice opt-out API response status: ${response.status}`);
+
+    const responseText = await response.text();
+    console.log('Voice opt-out API response body:', responseText);
+
+    if (!response.ok) {
+      throw new Error(`Voice opt-out API failed with status ${response.status}. Body: ${responseText}`);
+    }
+
+    let data = {};
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (error) {
+      console.warn('Voice opt-out API returned non-JSON body:', error);
+    }
+
+    if (data.found) {
+      twiml.say('You have been removed from future ThunderCall voice calls. Goodbye.');
+      console.log(`Voice opt-out succeeded for ${normalizedPhone}.`);
+    } else {
+      twiml.say('We could not find an active ThunderCall voice signup for this number. Goodbye.');
+      console.log(`No active voice signup found for ${normalizedPhone}.`);
+    }
+    twiml.hangup();
+  };
+
   if (event.Digits) {
     console.log(`Digit pressed: ${event.Digits}`);
-    switch (event.Digits) {
-      case '1':
-        console.log("Case 1 selected: Attempting to call getLastCallInfo API.");
-        // User pressed 1: Call getLastCallInfo API and play audio based on response
-        try {
-          // Construct the API URL with the processed phone number
-          const apiUrl = `${API_BASE_URL}getLastCallInfo?phoneNumber=${encodeURIComponent(number)}`;
-          console.log(`Calling API with processed number: ${apiUrl}`);
-          const response = await fetch(apiUrl); // Make the asynchronous API call
-          console.log("API response received (raw):", response);
 
-          // Check if the API response was successful
-          if (!response.ok) {
-            // Throw an error if the HTTP status is not in the 200-299 range
-            throw new Error(`API call to getLastCallInfo failed with status: ${response.status}`);
-          }
-          const data = await response.json(); // Parse the JSON response body
-          console.log("API response data (parsed):", data);
+    try {
+      switch (event.Digits) {
+        case '1':
+          console.log('Case 1 selected: play latest alert.');
+          await playLatestAlert();
+          break;
 
-          // Map API response fields to local variables based on user's new logic
-          const id = data.loc; // 'loc' from API response is equivalent to 'event.id'
-          const audio = data.type; // 'type' from API response is equivalent to 'event.audio'
-          console.log(`Mapped ID: ${id}, Mapped Audio Type: ${audio}`);
+        case '2':
+          console.log('Case 2 selected: record a message.');
+          twiml.play('https://thundercall-2287.twil.io/Option2.mp3');
+          twiml.redirect('/handle-recording');
+          break;
 
-          let audioUrl = '';
-          let sayTestMessage = false;
-          const testMessage = 'this is a test of the thundercall alerting system.  Reminder this is just a test.';
+        case '3':
+          console.log('Case 3 selected: opt out of future voice calls.');
+          await optOutCaller();
+          break;
 
-          // Determine the audio URL or if a test message should be spoken
-          if (id && (id == 64623 || id == 2)) { // KLTV
-            console.log("Matching ID 64623");
-            switch (audio) {
-              case 'WSW':
-                audioUrl = 'https://thundercall-2287.twil.io/thundercall%20winter.mp3';
-                break;
-              case 'FFW':
-                audioUrl = 'https://thundercall-2287.twil.io/Thundercall%20flood.mp3';
-                break;
-              case 'TOR':
-                audioUrl = 'https://thundercall-2287.twil.io/Thundercall%20Tornado.mp3';
-                break;
-              case 'SVR':
-                audioUrl = 'https://thundercall-2287.twil.io/Thundercall%20Tstorm.mp3';
-                break;
-              case 'TEST':
-                sayTestMessage = true;
-                break;
-              default:
-                audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-                break;
-            }
-          } else if (id && (id == 64622 || id == 4)) { // KWTX
-            console.log("Matching ID 64622");
-            switch (audio) {
-              case 'WSW':
-                audioUrl = 'https://thundercall-2287.twil.io/WinterKWTX.mp3';
-                break;
-              case 'FFW':
-                audioUrl = 'https://thundercall-2287.twil.io/FlashFloodKWTX.mp3';
-                break;
-              case 'TOR':
-                audioUrl = 'https://thundercall-2287.twil.io/TornadoKWTX.mp3';
-                break;
-              case 'SVR':
-                audioUrl = 'https://thundercall-2287.twil.io/SevereWeatherKWTX.mp3';
-                break;
-              case 'TEST':
-                sayTestMessage = true;
-                break;
-              default:
-                audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-                break;
-            }
-          } else if (id && (id == 64624 || id == 3)) { // KTRE
-            console.log("Matching ID 64624, 30411, 59907, or 47356");
-            switch (audio) {
-              case 'WSW':
-                audioUrl = 'https://thundercall-2287.twil.io/KTREWinterStormWarning.mp3';
-                break;
-              case 'FFW':
-                audioUrl = 'https://thundercall-2287.twil.io/KTREFloodWarning.mp3';
-                break;
-              case 'TOR':
-                audioUrl = 'https://thundercall-2287.twil.io/KTRETornadoWarning.mp3';
-                break;
-              case 'SVR':
-                audioUrl = 'https://thundercall-2287.twil.io/KTREThunderStormWarning.mp3';
-                break;
-              case 'TEST':
-                sayTestMessage = true;
-                break;
-              default:
-                audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-                break;
-            }
-          } else {
-            switch (audio) {
-              case 'WSW':
-              audioUrl = "https://thundercall-2287.twil.io/GenericWinterStormWarning.mp3"
-              break;
-              case 'FFW':
-              audioUrl = "https://thundercall-2287.twil.io/GenericFlashFlood.mp3"
-              break;
-              case 'SVR':
-              audioUrl = "https://thundercall-2287.twil.io/GenericSevereStorm.mp3"
-              break;
-              case 'TOR':
-              audioUrl = "https://thundercall-2287.twil.io/GenericTornado.mp3"
-              break;
-              default:
-                audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-                break;              
-            }
-            console.log("No specific ID match. Playing default audio.");
-            // If ID is not recognized or not present, play a default sound.
-            audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-          }
-
-          if (sayTestMessage) {
-            twiml.say(testMessage);
-            console.log(`Saying test message: "${testMessage}"`);
-          } else {
-            twiml.play(audioUrl);
-            console.log(`Playing determined audio: ${audioUrl}`);
-          }
-          
-          // **MODIFICATION START**
-          // Instead of hanging up, present the main menu again.
+        case '4':
+          console.log('Case 4 selected: invalid option prompt.');
+          twiml.say('Sorry, that was not a valid option. Please try again.');
           presentMenu();
-          console.log("Message played. Returning to main menu.");
-          // **MODIFICATION END**
+          break;
 
-        } catch (error) {
-          // Log any errors during the API call or processing
-          console.error("Error in case 1 (getLastCallInfo API call):", error);
-          twiml.say('Sorry, there was an issue retrieving call information. Goodbye.');
-          twiml.hangup(); // End the call on error
-        }
-        break;
+        case '5':
+          console.log('Case 5 selected: repeat options.');
+          twiml.say('Repeating response options.');
+          presentMenu();
+          break;
 
-      case '2':
-        twiml.play('https://thundercall-2287.twil.io/Option2.mp3');
-        twiml.redirect('/handle-recording');
-        break;
-
-case '3':
-        console.log("Case 3 selected: Attempting to call setRecInactive API.");
-        try {
-          // Construct the API URL with the processed phone number
-          const apiUrl = `${API_BASE_URL}setRecInactive?phoneNumber=${encodeURIComponent(number)}`;
-          console.log(`Calling API with processed number: ${apiUrl}`);
-          
-          // Enforce a timeout check manually or ensure it returns fast
-          const response = await fetch(apiUrl); 
-          console.log(`API response status: ${response.status}`);
-
-          // Consuming the response body prevents stream hanging errors
-          const responseText = await response.text();
-          console.log("API response body:", responseText);
-
-          if (!response.ok) {
-            throw new Error(`API call failed with status: ${response.status}. Body: ${responseText}`);
-          }
-
-          // If successful, tell the user and hang up
-          twiml.say('Your recording has been deactivated. Goodbye.');
-          twiml.hangup();
-          console.log("Recording deactivated successfully.");
-
-        } catch (error) {
-          // Log the exact error to Twilio Real-time logs
-          console.error("CRITICAL Error in case 3:", error.message);
-          
-          // Provide a clean fallback to the caller instead of Twilio's generic system error
-          twiml.say('Sorry, we could not process your request at this time. Please try again later.');
-          twiml.hangup();
-        }
-        break;
-
-      case '4':
-        console.log("Case 4 selected: Invalid option.");
-        // As per the provided code in your query, '4' is treated as an invalid option.
-        twiml.say('Sorry, that was not a valid option. Please try again.');
-        presentMenu(); // Present the menu again
-        break;
-
-      case '5':
-        console.log("Case 5 selected: Repeating options.");
-        // User requested to repeat options
-        twiml.say('Repeating response options.');
-        presentMenu(); // Present the menu again by playing the audio
-        break;
-
-      default:
-        console.log(`Default case (invalid digit ${event.Digits}) selected.`);
-        // User pressed an invalid digit (not 1, 2, 3, 4, or 5)
-        twiml.say('Sorry, that was not a valid option. Please try again.');
-        presentMenu(); // Present the menu again
-        break;
+        default:
+          console.log(`Invalid digit selected: ${event.Digits}`);
+          twiml.say('Sorry, that was not a valid option. Please try again.');
+          presentMenu();
+          break;
+      }
+    } catch (error) {
+      console.error('Error while handling menu selection:', error);
+      twiml.say('Sorry, we could not process your request at this time. Please try again later.');
+      twiml.hangup();
     }
   } else {
-    console.log("Initial call or previous gather timed out (no digits received).");
-    // This block runs when the function is called for the first time (initial incoming call)
-
-    // Play the initial greeting audio
-    twiml.play({ loop: 1 }, greetingAudioUrl); // Play the greeting audio once
+    console.log('Initial call or prior gather timeout.');
+    twiml.play({ loop: 1 }, greetingAudioUrl);
     console.log(`Playing greeting audio: ${greetingAudioUrl}`);
-
-    // Present the IVR menu to the caller by playing the main menu audio
     presentMenu();
-    console.log("Initial menu presented.");
   }
 
-  // Return the TwiML as the second argument to callback
-  // This will render the response as XML in reply to the webhook request
-  console.log("Returning TwiML response.");
+  console.log('Returning TwiML response.');
   return callback(null, twiml);
 };
 
+function normalizePhoneNumber(value) {
+  if (!value) {
+    return '';
+  }
+
+  let digits = String(value).replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    digits = digits.substring(1);
+  }
+
+  if (digits.length !== 10) {
+    return '';
+  }
+
+  return digits;
+}
+
+function resolvePlayback(stationAudioByAccountId, genericAudioByType, accountId, audioType, defaultAudioUrl) {
+  if (audioType === 'TEST') {
+    return { sayTestMessage: true, audioUrl: '' };
+  }
+
+  const stationAudio = stationAudioByAccountId[accountId];
+  if (stationAudio && stationAudio[audioType]) {
+    return { sayTestMessage: false, audioUrl: stationAudio[audioType] };
+  }
+
+  if (genericAudioByType[audioType]) {
+    return { sayTestMessage: false, audioUrl: genericAudioByType[audioType] };
+  }
+
+  return { sayTestMessage: false, audioUrl: defaultAudioUrl };
+}

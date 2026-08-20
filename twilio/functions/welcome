@@ -1,92 +1,65 @@
 exports.handler = function(context, event, callback) {
   const twiml = new Twilio.twiml.VoiceResponse();
-  let audioUrl = '';
-  let sayTestMessage = false;
-  const testMessage = 'this is a test of the thundercall alerting system.  Reminder this is just a test.';
+  const accountId = Number(event.id);
+  const audioType = String(event.audio || '').trim().toUpperCase();
+  const testMessage = 'this is a test of the thundercall alerting system. Reminder this is just a test.';
+  const defaultAudioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
 
-  if (event.id && (event.id == 64623 || event.id == 2)) { // KLTV
-    // Use the 'audio' parameter to determine which audio file URL to play.
-    switch (event.audio) {
-      case 'WSW':
-        audioUrl = 'https://thundercall-2287.twil.io/thundercall%20winter.mp3';
-        break;
-      case 'FFW':
-        audioUrl = 'https://thundercall-2287.twil.io/Thundercall%20flood.mp3';
-        break;
-      case 'TOR':
-        audioUrl = 'https://thundercall-2287.twil.io/Thundercall%20Tornado.mp3';
-        break;
-      case 'SVR':
-        audioUrl = 'https://thundercall-2287.twil.io/Thundercall%20Tstorm.mp3';
-        break;
-      case 'TEST':
-        sayTestMessage = true;
-        break;
-      default:
-        audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-        break;
+  const stationAudioByAccountId = {
+    2: {
+      WSW: 'https://thundercall-2287.twil.io/thundercall%20winter.mp3',
+      FFW: 'https://thundercall-2287.twil.io/Thundercall%20flood.mp3',
+      TOR: 'https://thundercall-2287.twil.io/Thundercall%20Tornado.mp3',
+      SVR: 'https://thundercall-2287.twil.io/Thundercall%20Tstorm.mp3'
+    },
+    4: {
+      WSW: 'https://thundercall-2287.twil.io/WinterKWTX.mp3',
+      FFW: 'https://thundercall-2287.twil.io/FlashFloodKWTX.mp3',
+      TOR: 'https://thundercall-2287.twil.io/TornadoKWTX.mp3',
+      SVR: 'https://thundercall-2287.twil.io/SevereWeatherKWTX.mp3'
+    },
+    3: {
+      WSW: 'https://thundercall-2287.twil.io/KTREWinterStormWarning.mp3',
+      FFW: 'https://thundercall-2287.twil.io/KTREFloodWarning.mp3',
+      TOR: 'https://thundercall-2287.twil.io/KTRETornadoWarning.mp3',
+      SVR: 'https://thundercall-2287.twil.io/KTREThunderStormWarning.mp3'
     }
-  } 
-  else if(event.id && (event.id == 64622 || event.id == 4)) { // KWTX
-    switch (event.audio) {
-      case 'WSW':
-        audioUrl = 'https://thundercall-2287.twil.io/WinterKWTX.mp3';
-        break;
-      case 'FFW':
-        audioUrl = 'https://thundercall-2287.twil.io/FlashFloodKWTX.mp3';
-        break;
-      case 'TOR':
-        audioUrl = 'https://thundercall-2287.twil.io/TornadoKWTX.mp3';
-        break;
-      case 'SVR':
-        audioUrl = 'https://thundercall-2287.twil.io/SevereWeatherKWTX.mp3';
-        break;
-      case 'TEST':
-        sayTestMessage = true;
-        break;
-      default:
-        audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-        break;
-      }    
-  }
-    else if(event.id && (event.id == 64624 || event.id == 3)) { // KTRE
-    switch (event.audio) {
-      case 'WSW':
-        audioUrl = 'https://thundercall-2287.twil.io/KTREWinterStormWarning.mp3';
-        break;
-      case 'FFW':
-        audioUrl = 'https://thundercall-2287.twil.io/KTREFloodWarning.mp3';
-        break;
-      case 'TOR':
-        audioUrl = 'https://thundercall-2287.twil.io/KTRETornadoWarning.mp3';
-        break;
-      case 'SVR':
-        audioUrl = 'https://thundercall-2287.twil.io/KTREThunderStormWarning.mp3';
-        break;
-      case 'TEST':
-        sayTestMessage = true;
-        break;
-      default:
-        audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
-        break;
-      }    
-  }
-  else {
-    //if Id is not 691 or is not present play a default sound. for example winter.
-    audioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
+  };
+
+  const genericAudioByType = {
+    WSW: 'https://thundercall-2287.twil.io/GenericWinterStormWarning.mp3',
+    FFW: 'https://thundercall-2287.twil.io/GenericFlashFlood.mp3',
+    SVR: 'https://thundercall-2287.twil.io/GenericSevereStorm.mp3',
+    TOR: 'https://thundercall-2287.twil.io/GenericTornado.mp3'
+  };
+
+  const playback = resolvePlayback(stationAudioByAccountId, genericAudioByType, accountId, audioType, defaultAudioUrl);
+
+  if (playback.sayTestMessage) {
+    twiml.say(testMessage);
+  } else {
+    twiml.play(playback.audioUrl);
   }
 
-  if (sayTestMessage) {
-    twiml.say(testMessage);
-    twiml.pause({ length: 1 }); // Wait for 1 second
-    twiml.hangup();
-  } else {
-    twiml.play(audioUrl);
-    twiml.pause({ length: 1 }); // Wait for 1 second
-    twiml.hangup();
-  }
+  twiml.pause({ length: 1 });
+  twiml.hangup();
 
   callback(null, twiml);
 };
 
+function resolvePlayback(stationAudioByAccountId, genericAudioByType, accountId, audioType, defaultAudioUrl) {
+  if (audioType === 'TEST') {
+    return { sayTestMessage: true, audioUrl: '' };
+  }
 
+  const stationAudio = stationAudioByAccountId[accountId];
+  if (stationAudio && stationAudio[audioType]) {
+    return { sayTestMessage: false, audioUrl: stationAudio[audioType] };
+  }
+
+  if (genericAudioByType[audioType]) {
+    return { sayTestMessage: false, audioUrl: genericAudioByType[audioType] };
+  }
+
+  return { sayTestMessage: false, audioUrl: defaultAudioUrl };
+}
