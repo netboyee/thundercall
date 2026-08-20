@@ -2,7 +2,7 @@ exports.handler = function(context, event, callback) {
   const twiml = new Twilio.twiml.VoiceResponse();
   const accountId = Number(event.id);
   const audioType = String(event.audio || '').trim().toUpperCase();
-  const testMessage = 'this is a test of the thundercall alerting system. Reminder this is just a test.';
+  const testMessage = 'This is a test of the thundercall alerting system. Reminder this is just a test.';
   const defaultAudioUrl = 'https://thundercall-2287.twil.io/DefaultThunderCall.mp3';
 
   const stationAudioByAccountId = {
