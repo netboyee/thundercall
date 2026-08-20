@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"thundercall-go/internal/models"
 	twilioprovider "thundercall-go/internal/providers/twilio"
@@ -19,27 +18,14 @@ import (
 
 type publicLastVoiceMessageRecord struct {
 	AccountID     int64
-	MessageID     int64
 	EventCode     string
 	AlertTypeCode string
-	Destination   string
-	RequestedAt   time.Time
-	SentAt        *time.Time
-	DeliveredAt   *time.Time
 }
 
 type publicLastVoiceMessageResponse struct {
-	Found         bool       `json:"found"`
-	Loc           *int64     `json:"loc"`
-	Type          string     `json:"type"`
-	AccountID     *int64     `json:"accountId,omitempty"`
-	MessageID     *int64     `json:"messageId,omitempty"`
-	EventCode     string     `json:"eventCode,omitempty"`
-	AlertTypeCode string     `json:"alertTypeCode,omitempty"`
-	PhoneNumber   string     `json:"phoneNumber"`
-	RequestedAt   *time.Time `json:"requestedAt,omitempty"`
-	SentAt        *time.Time `json:"sentAt,omitempty"`
-	DeliveredAt   *time.Time `json:"deliveredAt,omitempty"`
+	Found     bool   `json:"found"`
+	AccountID *int64 `json:"account_id,omitempty"`
+	Type      string `json:"type,omitempty"`
 }
 
 type publicVoiceOptOutResponse struct {
@@ -52,7 +38,7 @@ type publicVoiceOptOutResponse struct {
 }
 
 func (s *Server) handleGetLastPublicVoiceMessage(w http.ResponseWriter, r *http.Request) {
-	normalizedPhone, variants, err := publicPhoneLookupVariants(r.URL.Query().Get("phoneNumber"))
+	_, variants, err := publicPhoneLookupVariants(r.URL.Query().Get("phoneNumber"))
 	if err != nil {
 		writePublicVoiceCompatibilityError(w, http.StatusBadRequest, err.Error())
 		return
@@ -65,28 +51,15 @@ func (s *Server) handleGetLastPublicVoiceMessage(w http.ResponseWriter, r *http.
 	}
 	if record == nil {
 		writeJSON(w, http.StatusOK, publicLastVoiceMessageResponse{
-			Found:       false,
-			Loc:         nil,
-			Type:        "",
-			PhoneNumber: normalizedPhone,
+			Found: false,
 		})
 		return
 	}
 
-	loc := record.AccountID
-	messageID := record.MessageID
 	response := publicLastVoiceMessageResponse{
-		Found:         true,
-		Loc:           &loc,
-		Type:          twilioprovider.VoiceFunctionAudioCode(record.EventCode, record.AlertTypeCode),
-		AccountID:     &loc,
-		MessageID:     &messageID,
-		EventCode:     record.EventCode,
-		AlertTypeCode: record.AlertTypeCode,
-		PhoneNumber:   record.Destination,
-		RequestedAt:   &record.RequestedAt,
-		SentAt:        record.SentAt,
-		DeliveredAt:   record.DeliveredAt,
+		Found:     true,
+		AccountID: &record.AccountID,
+		Type:      twilioprovider.VoiceFunctionAudioCode(record.EventCode, record.AlertTypeCode),
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -133,13 +106,8 @@ func (s *Server) lookupLatestVoiceMessageByPhone(ctx context.Context, destinatio
 	query := fmt.Sprintf(`
 		SELECT
 			COALESCE(m.account_id, u.account_id) AS account_id,
-			m.id,
 			m.event_code,
-			m.alert_type_code,
-			da.destination,
-			da.requested_at,
-			da.sent_at,
-			da.delivered_at
+			m.alert_type_code
 		FROM delivery_attempts da
 		INNER JOIN users_messages um
 			ON um.id = da.users_message_id
@@ -157,19 +125,12 @@ func (s *Server) lookupLatestVoiceMessageByPhone(ctx context.Context, destinatio
 	row := s.db.QueryRowContext(ctx, query, args...)
 
 	var (
-		record      publicLastVoiceMessageRecord
-		sentAt      sql.NullTime
-		deliveredAt sql.NullTime
+		record publicLastVoiceMessageRecord
 	)
 	if err := row.Scan(
 		&record.AccountID,
-		&record.MessageID,
 		&record.EventCode,
 		&record.AlertTypeCode,
-		&record.Destination,
-		&record.RequestedAt,
-		&sentAt,
-		&deliveredAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -177,8 +138,6 @@ func (s *Server) lookupLatestVoiceMessageByPhone(ctx context.Context, destinatio
 		return nil, err
 	}
 
-	record.SentAt = sqlutil.TimePtr(sentAt)
-	record.DeliveredAt = sqlutil.TimePtr(deliveredAt)
 	return &record, nil
 }
 

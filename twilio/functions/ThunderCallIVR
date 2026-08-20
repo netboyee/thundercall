@@ -97,7 +97,7 @@ exports.handler = async (context, event, callback) => {
       return;
     }
 
-    const accountId = Number(data.loc);
+    const accountId = Number(data.account_id);
     const audioType = String(data.type || '').trim().toUpperCase();
     const playback = resolvePlayback(stationAudioByAccountId, genericAudioByType, accountId, audioType, defaultAudioUrl);
 

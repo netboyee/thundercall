@@ -520,7 +520,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/users/messages/last?phoneNumber={{publicVoicePhoneNumber}}",
-            "description": "Public Twilio IVR compatibility lookup. Returns the legacy `loc` and `type` fields for the latest successful voice alert sent to the supplied phone number."
+            "description": "Public Twilio IVR compatibility lookup. Returns `account_id` and `type` for the latest successful voice alert sent to the supplied phone number."
           }
         },
         {

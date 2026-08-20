@@ -891,9 +891,7 @@ Query parameters:
 
 Notes:
 
-- the response keeps the legacy `loc` and `type` fields for compatibility
-- `loc` is the ThunderCall `accountId`, because the Twilio function already
-  branches correctly on the new account ids `2`, `3`, and `4`
+- the response returns the ThunderCall account as `account_id`
 - `type` is the normalized voice audio code returned by the new API:
   `WSW`, `FFW`, `TOR`, `SVR`, or `TEST`
 - if no successful prior voice alert is found, the endpoint still returns
@@ -904,16 +902,8 @@ Success response with a match:
 ```json
 {
   "found": true,
-  "loc": 4,
+  "account_id": 4,
   "type": "SVR",
-  "accountId": 4,
-  "messageId": 21901,
-  "eventCode": "SVR",
-  "alertTypeCode": "severe_thunderstorm_warning",
-  "phoneNumber": "+14073530340",
-  "requestedAt": "2026-08-20T16:12:00Z",
-  "sentAt": "2026-08-20T16:12:04Z",
-  "deliveredAt": "2026-08-20T16:12:07Z"
 }
 ```
 
@@ -921,10 +911,7 @@ Success response without a match:
 
 ```json
 {
-  "found": false,
-  "loc": null,
-  "type": "",
-  "phoneNumber": "+14073530340"
+  "found": false
 }
 ```
 

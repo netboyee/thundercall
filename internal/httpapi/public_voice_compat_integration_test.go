@@ -56,26 +56,11 @@ func TestHandleGetLastPublicVoiceMessageReturnsLatestSentAttempt(t *testing.T) {
 	if !payload.Found {
 		t.Fatal("expected found=true")
 	}
-	if payload.Loc == nil || *payload.Loc != account.ID {
-		t.Fatalf("loc = %v, want %d", payload.Loc, account.ID)
-	}
 	if payload.AccountID == nil || *payload.AccountID != account.ID {
-		t.Fatalf("accountId = %v, want %d", payload.AccountID, account.ID)
-	}
-	if payload.MessageID == nil || *payload.MessageID != latestSentMessage.ID {
-		t.Fatalf("messageId = %v, want %d", payload.MessageID, latestSentMessage.ID)
+		t.Fatalf("account_id = %v, want %d", payload.AccountID, account.ID)
 	}
 	if payload.Type != "FFW" {
 		t.Fatalf("type = %q, want FFW", payload.Type)
-	}
-	if payload.EventCode != "FLS" {
-		t.Fatalf("eventCode = %q, want FLS", payload.EventCode)
-	}
-	if payload.AlertTypeCode != "flash_flood_warning" {
-		t.Fatalf("alertTypeCode = %q, want flash_flood_warning", payload.AlertTypeCode)
-	}
-	if payload.PhoneNumber != "+14073530340" {
-		t.Fatalf("phoneNumber = %q, want +14073530340", payload.PhoneNumber)
 	}
 }
 
@@ -98,14 +83,11 @@ func TestHandleGetLastPublicVoiceMessageReturnsNotFoundPayload(t *testing.T) {
 	if payload.Found {
 		t.Fatal("expected found=false")
 	}
-	if payload.Loc != nil {
-		t.Fatalf("loc = %v, want nil", payload.Loc)
+	if payload.AccountID != nil {
+		t.Fatalf("account_id = %v, want nil", payload.AccountID)
 	}
 	if payload.Type != "" {
 		t.Fatalf("type = %q, want empty", payload.Type)
-	}
-	if payload.PhoneNumber != "+14073530340" {
-		t.Fatalf("phoneNumber = %q, want +14073530340", payload.PhoneNumber)
 	}
 }
 
