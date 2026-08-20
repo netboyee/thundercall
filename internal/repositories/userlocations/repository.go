@@ -152,3 +152,24 @@ func (r *Repository) ListByUserID(ctx context.Context, userID int64) ([]models.U
 
 	return userLocations, rows.Err()
 }
+
+func (r *Repository) DisableThunderCallByUserIDs(ctx context.Context, userIDs []int64) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+
+	args := make([]any, 0, len(userIDs))
+	for _, id := range userIDs {
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE users_locations
+		SET is_thundercall_enabled = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE user_id IN (%s)
+		  AND is_thundercall_enabled = 1`, sqlutil.Placeholders(len(userIDs)))
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
+}

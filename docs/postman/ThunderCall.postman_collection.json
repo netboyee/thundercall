@@ -65,6 +65,10 @@
       "value": "203.0.113.10"
     },
     {
+      "key": "publicVoicePhoneNumber",
+      "value": "4073530340"
+    },
+    {
       "key": "twilioAuthToken",
       "value": ""
     },
@@ -500,6 +504,40 @@
             },
             "url": "{{baseUrl}}/api/users/signup",
             "description": "ThunderCall public signup endpoint with the slim request body used by the new signup form. Legacy signup fields such as `displayName`, `tcall`, typed contact metadata, `phoneSetting`, and `locationIds` are not accepted here."
+          }
+        },
+        {
+          "name": "GET /api/users/messages/last",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/users/messages/last?phoneNumber={{publicVoicePhoneNumber}}",
+            "description": "Public Twilio IVR compatibility lookup. Returns the legacy `loc` and `type` fields for the latest successful voice alert sent to the supplied phone number."
+          }
+        },
+        {
+          "name": "GET /api/users/voice/opt-out",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/users/voice/opt-out?phoneNumber={{publicVoicePhoneNumber}}",
+            "description": "Public Twilio IVR compatibility opt-out route. Marks matching signup users inactive, disables their ThunderCall subscriptions, and deactivates their voice contact methods."
           }
         },
         {

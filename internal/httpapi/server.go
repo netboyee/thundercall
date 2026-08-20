@@ -91,8 +91,10 @@ func NewServerWithTwilio(db *sql.DB, sessionTTL time.Duration, resolver geocode.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /api/users/messages/last", s.handleGetLastPublicVoiceMessage)
 	mux.HandleFunc("OPTIONS /api/users/signup", s.handlePublicSignupOptions)
 	mux.HandleFunc("POST /api/users/signup", s.handlePublicSignup)
+	mux.HandleFunc("GET /api/users/voice/opt-out", s.handlePublicVoiceOptOut)
 	mux.HandleFunc("OPTIONS /api/products/{productId}/records", s.handlePublicSignupOptions)
 	mux.HandleFunc("POST /api/products/{productId}/records", s.handleLegacyPublicSignup)
 	mux.HandleFunc("POST /api/providers/twilio/voice/status", s.handleTwilioVoiceStatusCallback)

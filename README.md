@@ -489,6 +489,13 @@ These all map to the same public signup flow:
 - `POST /api/products/{productId}/records`
 - `POST /v1/public/signups`
 
+### Public Voice Compatibility
+
+These support the legacy Twilio IVR lookup and opt-out flows during cutover:
+
+- `GET /api/users/messages/last`
+- `GET /api/users/voice/opt-out`
+
 The public signup handler is rate-limited per client IP by default and returns
 `429 Too Many Requests` with a `Retry-After` header when the limit is exceeded.
 If the upstream geocoder has a transient failure, signup still succeeds and the

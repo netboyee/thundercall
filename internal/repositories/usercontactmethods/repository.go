@@ -161,3 +161,77 @@ func (r *Repository) ListByUserIDs(ctx context.Context, userIDs []int64) ([]mode
 
 	return methods, rows.Err()
 }
+
+func (r *Repository) ListActiveByChannelAndDestinations(ctx context.Context, channel models.Channel, destinations []string) ([]models.UserContactMethod, error) {
+	if len(destinations) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, 0, 1+len(destinations))
+	args = append(args, string(channel))
+	for _, destination := range destinations {
+		args = append(args, destination)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, user_id, channel, destination, is_primary, is_verified, active, created_at, updated_at
+		FROM user_contact_methods
+		WHERE active = 1
+		  AND channel = ?
+		  AND destination IN (%s)
+		ORDER BY user_id, is_primary DESC, id`, sqlutil.Placeholders(len(destinations)))
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var methods []models.UserContactMethod
+	for rows.Next() {
+		var method models.UserContactMethod
+		var scannedChannel string
+
+		if err := rows.Scan(
+			&method.ID,
+			&method.UserID,
+			&scannedChannel,
+			&method.Destination,
+			&method.IsPrimary,
+			&method.IsVerified,
+			&method.Active,
+			&method.CreatedAt,
+			&method.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		method.Channel = models.Channel(scannedChannel)
+		methods = append(methods, method)
+	}
+
+	return methods, rows.Err()
+}
+
+func (r *Repository) DeactivateByUserIDsAndChannel(ctx context.Context, userIDs []int64, channel models.Channel) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+
+	args := make([]any, 0, 1+len(userIDs))
+	args = append(args, string(channel))
+	for _, id := range userIDs {
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE user_contact_methods
+		SET active = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE channel = ?
+		  AND user_id IN (%s)
+		  AND active = 1`, sqlutil.Placeholders(len(userIDs)))
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
+}

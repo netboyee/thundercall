@@ -873,6 +873,120 @@ Common errors:
 - `502 Bad Gateway`: external geocoding or NWS enrichment failed
 - `500 Internal Server Error`: failed to create the new user or location
 
+## `GET /api/users/messages/last`
+
+Public compatibility endpoint for the Twilio IVR "play my last alert" flow.
+It looks up the latest successful voice delivery attempt for the supplied phone
+number and returns the legacy response fields the function already expects.
+
+Authentication:
+
+- not required
+
+Query parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `phoneNumber` | string | Recipient phone number in 10-digit, 11-digit, or E.164 form |
+
+Notes:
+
+- the response keeps the legacy `loc` and `type` fields for compatibility
+- `loc` is the ThunderCall `accountId`, because the Twilio function already
+  branches correctly on the new account ids `2`, `3`, and `4`
+- `type` is the normalized voice audio code returned by the new API:
+  `WSW`, `FFW`, `TOR`, `SVR`, or `TEST`
+- if no successful prior voice alert is found, the endpoint still returns
+  `200 OK` with `found: false`
+
+Success response with a match:
+
+```json
+{
+  "found": true,
+  "loc": 4,
+  "type": "SVR",
+  "accountId": 4,
+  "messageId": 21901,
+  "eventCode": "SVR",
+  "alertTypeCode": "severe_thunderstorm_warning",
+  "phoneNumber": "+14073530340",
+  "requestedAt": "2026-08-20T16:12:00Z",
+  "sentAt": "2026-08-20T16:12:04Z",
+  "deliveredAt": "2026-08-20T16:12:07Z"
+}
+```
+
+Success response without a match:
+
+```json
+{
+  "found": false,
+  "loc": null,
+  "type": "",
+  "phoneNumber": "+14073530340"
+}
+```
+
+Common errors:
+
+- `400 Bad Request`: phone number missing or not 10 digits
+- `500 Internal Server Error`: failed to query the latest voice delivery
+
+## `GET /api/users/voice/opt-out`
+
+Public compatibility endpoint for the Twilio IVR "stop calling me" flow. It
+finds all signup users with an active voice contact method matching the
+supplied phone number, marks those users inactive, disables their ThunderCall
+subscriptions, and deactivates only their voice contact methods.
+
+Authentication:
+
+- not required
+
+Query parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `phoneNumber` | string | Recipient phone number in 10-digit, 11-digit, or E.164 form |
+
+Notes:
+
+- this is a purpose-built replacement for the legacy `/setRecInactive` route
+- non-voice contact methods are left unchanged
+- if no matching active voice recipients are found, the endpoint still returns
+  `200 OK` with `found: false`
+
+Success response with a match:
+
+```json
+{
+  "found": true,
+  "phoneNumber": "+14073530340",
+  "matchedUsersCount": 2,
+  "deactivatedUsersCount": 2,
+  "userIds": [95199, 95200],
+  "message": "Voice recipients deactivated."
+}
+```
+
+Success response without a match:
+
+```json
+{
+  "found": false,
+  "phoneNumber": "+14073530340",
+  "matchedUsersCount": 0,
+  "deactivatedUsersCount": 0,
+  "message": "No active voice recipients found."
+}
+```
+
+Common errors:
+
+- `400 Bad Request`: phone number missing or not 10 digits
+- `500 Internal Server Error`: failed to deactivate matching voice recipients
+
 ## `GET /v1/messages/{id}/locations`
 
 Returns the impacted locations for a specific message, along with recipient counts.

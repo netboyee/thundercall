@@ -132,6 +132,26 @@ func (r *Repository) ListByIDs(ctx context.Context, ids []int64) ([]models.User,
 	return users, rows.Err()
 }
 
+func (r *Repository) DeactivateByIDs(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE users
+		SET active = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id IN (%s)`, sqlutil.Placeholders(len(ids)))
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
