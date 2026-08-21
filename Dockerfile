@@ -35,6 +35,13 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w" -o /out/voice-dispatcher ./cmd/voice-dispatcher
 
+FROM deps AS build-backfill-location-geometry
+COPY . .
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o /out/backfill-location-geometry ./cmd/backfill-location-geometry
+
 FROM scratch AS api
 COPY --from=build-api /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build-api /out/api /thundercall
@@ -57,5 +64,11 @@ ENTRYPOINT ["/thundercall"]
 FROM scratch AS voice-dispatcher
 COPY --from=build-voice-dispatcher /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build-voice-dispatcher /out/voice-dispatcher /thundercall
+USER 65532:65532
+ENTRYPOINT ["/thundercall"]
+
+FROM scratch AS backfill-location-geometry
+COPY --from=build-backfill-location-geometry /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build-backfill-location-geometry /out/backfill-location-geometry /thundercall
 USER 65532:65532
 ENTRYPOINT ["/thundercall"]

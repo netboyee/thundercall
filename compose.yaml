@@ -45,7 +45,6 @@ services:
     env_file:
       - .env.docker
     environment:
-      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
       THUNDERCALL_API_LISTEN_ADDR: :8080
     depends_on:
       mysql:
@@ -71,7 +70,6 @@ services:
     env_file:
       - .env.docker
     environment:
-      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
       THUNDERCALL_REDIS_ADDR: redis:6379
       THUNDERCALL_REDIS_STREAM: thundercall:messages
       THUNDERCALL_REDIS_GROUP: thundercall-workers
@@ -100,7 +98,6 @@ services:
     env_file:
       - .env.docker
     environment:
-      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
       THUNDERCALL_REDIS_ADDR: redis:6379
       THUNDERCALL_REDIS_STREAM: thundercall:messages
       THUNDERCALL_REDIS_GROUP: thundercall-workers
@@ -129,7 +126,6 @@ services:
     env_file:
       - .env.docker
     environment:
-      THUNDERCALL_MYSQL_DSN: thundercall:thundercall@tcp(mysql:3306)/thundercall?charset=utf8mb4&parseTime=true&loc=UTC
       THUNDERCALL_HEARTBEAT_PATH: /dev/shm/thundercall/voice-dispatcher.heartbeat
       THUNDERCALL_HEARTBEAT_MAX_AGE: 45s
       THUNDERCALL_VOICE_CONSUMER: voice-dispatcher-1
