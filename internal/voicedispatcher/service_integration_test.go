@@ -114,6 +114,20 @@ func TestMySQLIntegrationClaimQueuedVoiceAttemptsFairAcrossMessages(t *testing.T
 			t.Fatalf("record %d account_id = %v, want recipient account %d", i, records[i].AccountID, account.ID)
 		}
 	}
+
+	// A restarted dispatcher must reclaim rows whose previous lease expired.
+	reclaimed, err := attemptRepo.ClaimQueuedVoiceAttempts(ctx, "lease-2", "dispatcher-2", now.Add(2*time.Minute), time.Minute, 5)
+	if err != nil {
+		t.Fatalf("reclaim expired attempts error = %v", err)
+	}
+	if len(reclaimed) != 5 {
+		t.Fatalf("reclaimed attempts = %d, want 5", len(reclaimed))
+	}
+	for _, record := range reclaimed {
+		if record.Attempt.LeaseToken == nil || *record.Attempt.LeaseToken != "lease-2" {
+			t.Fatalf("reclaimed attempt %d lease_token = %v, want lease-2", record.Attempt.ID, record.Attempt.LeaseToken)
+		}
+	}
 }
 
 func TestMySQLIntegrationWorkerAndVoiceDispatcherOnlyCallNetNewUsersOnUpdatedEvent(t *testing.T) {

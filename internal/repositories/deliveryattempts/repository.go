@@ -309,7 +309,7 @@ func (r *Repository) ClaimQueuedVoiceAttempts(ctx context.Context, leaseToken st
 				INNER JOIN messages m
 					ON m.id = um.message_id
 				WHERE da.channel = 'voice'
-				  AND da.status = 'queued'
+				  AND da.status IN ('queued', 'dispatching')
 				  AND da.dispatch_after <= ?
 				  AND (da.lease_expires_at IS NULL OR da.lease_expires_at <= ?)
 			) ranked
@@ -323,7 +323,7 @@ func (r *Repository) ClaimQueuedVoiceAttempts(ctx context.Context, leaseToken st
 		    da.lease_expires_at = ?,
 		    da.updated_at = CURRENT_TIMESTAMP
 		WHERE da.channel = 'voice'
-		  AND da.status = 'queued'
+		  AND da.status IN ('queued', 'dispatching')
 		  AND da.dispatch_after <= ?
 		  AND (da.lease_expires_at IS NULL OR da.lease_expires_at <= ?)`,
 		now,
