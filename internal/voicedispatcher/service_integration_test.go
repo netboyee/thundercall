@@ -42,7 +42,6 @@ func TestMySQLIntegrationClaimQueuedVoiceAttemptsFairAcrossMessages(t *testing.T
 	}
 
 	message1 := &models.Message{
-		AccountID:     &account.ID,
 		Fingerprint:   "m1",
 		Source:        "NWWS",
 		EventCode:     "SVR",
@@ -110,6 +109,9 @@ func TestMySQLIntegrationClaimQueuedVoiceAttemptsFairAcrossMessages(t *testing.T
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("claim order = %v, want %v", got, want)
+		}
+		if records[i].AccountID == nil || *records[i].AccountID != account.ID {
+			t.Fatalf("record %d account_id = %v, want recipient account %d", i, records[i].AccountID, account.ID)
 		}
 	}
 }

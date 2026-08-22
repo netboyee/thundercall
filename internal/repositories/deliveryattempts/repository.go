@@ -419,7 +419,7 @@ func selectVoiceDispatchSQL() string {
 			da.updated_at,
 			um.message_id,
 			um.user_id,
-			m.account_id,
+			COALESCE(m.account_id, u.account_id) AS account_id,
 			m.nws_event_id,
 			m.event_code,
 			m.alert_type_code,
@@ -435,7 +435,9 @@ func selectVoiceDispatchSQL() string {
 		INNER JOIN users_messages um
 			ON um.id = da.users_message_id
 		INNER JOIN messages m
-			ON m.id = um.message_id`
+			ON m.id = um.message_id
+		INNER JOIN users u
+			ON u.id = um.user_id`
 }
 
 func scanDeliveryAttempt(s scanner) (*models.DeliveryAttempt, error) {
